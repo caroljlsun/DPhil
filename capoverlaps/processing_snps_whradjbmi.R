@@ -1,7 +1,7 @@
 library(tidyverse)
 library(data.table)
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps")
 
 whradjbmi_finemapping <- fread("whradjbmi_combined_hg38_finemapping.bed")
 whradjbmi_snps <- fread("whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS.bed") %>% 
@@ -130,7 +130,7 @@ unified <- bind_rows(singlets = singlets, #173
 
 unified <- unified %>% select(-id, id)
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/")
 
 #write_tsv(unified, "whradjbmi_combined_hg38_selected_snps.bed")
 #write_tsv(unified, "whradjbmi_combined_hg38_selected_snps_round2.bed")
@@ -139,7 +139,7 @@ setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlap
 
 ### which oligos are these snps going to use?
 
-all_oligos <- fread("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whr_no_exons_no_TSS/oligo_info.txt")
+all_oligos <- fread("comp_bio/capture_c_adipocytes/capsequm2/oligo/whr_no_exons_no_TSS/oligo_info.txt")
 # remove that awkward comma...
 
 all_oligos_processed <- all_oligos %>% 
@@ -154,7 +154,7 @@ which_oligos <- all_oligos_processed[all_oligos_processed$unique_name %in% unifi
 
 # first the key of their failure:
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/")
 whr_pick_new_snps <- fread("leftright_coords_round2.bed")
 
 # clean key?

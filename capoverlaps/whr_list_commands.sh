@@ -2,7 +2,7 @@
 ### Setup ###
 ################################
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 # reusing another env with the newish bedtools
 
@@ -12,16 +12,16 @@ mamba activate fullcap
 ################################
 ### filtered and moved over to my working directory ###
 ################################
-cd /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/harmonized_data/harmonized_gwas
+cd genetic_department/projects/TargetLookup/harmonized_data/harmonized_gwas
 zcat whradjbmi.giant-ukbb.meta-analysis.combined.23May2018.txt.gz | wc -l #27374931
-zcat whradjbmi.giant-ukbb.meta-analysis.combined.23May2018.txt.gz | awk -F'\t' '$11 < 0.00000005'| gzip >  /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_filtered.gz 
+zcat whradjbmi.giant-ukbb.meta-analysis.combined.23May2018.txt.gz | awk -F'\t' '$11 < 0.00000005'| gzip >  comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_filtered.gz 
 
-zcat /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_filtered.gz | wc -l #54362
+zcat comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_filtered.gz | wc -l #54362
 ################################
 ### unzipped ###
 ################################
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 gunzip -k whradjbmi_combined_filtered.gz
 
@@ -33,7 +33,7 @@ cat whradjbmi_combined_filtered | awk -F'\t' -v OFS='\t' '{print "chr"$4, $5, $5
 ### liftover  ###
 ################################
 
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver whradjbmi_combined_extra_filtered.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz whradjbmi_combined_hg38_extra_filtered.bed unmapped_whradjbmi_combined_hg38_extra_filtered.bed 
+genetic_department/projects/TargetLookup/liftOver whradjbmi_combined_extra_filtered.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz whradjbmi_combined_hg38_extra_filtered.bed unmapped_whradjbmi_combined_hg38_extra_filtered.bed 
 
 #Deleted in new
 #chr20   45796954        45796955        rs3091475:T:C   0.0138  W       4.399e-12
@@ -72,9 +72,9 @@ awk 'BEGIN{OFS=FS="\t"} NR==FNR{a[NR]=$1;next}{$4=a[FNR]}1' full_lifted_rsid_cle
 ################################
 
 #just moving them over - it probably isn't best practice but the files seem relatively small?
-cp /nfs_home/projects/departments/nnrco/genetic_department/share/GATL_GMGZ/CRE_AdiposeTissue/H3K27ac-ChromatinStates_AdiposeTissue_GMGZ.bed H3K27ac_peaks.bed
+cp genetic_department/share/GATL_GMGZ/CRE_AdiposeTissue/H3K27ac-ChromatinStates_AdiposeTissue_GMGZ.bed H3K27ac_peaks.bed
 
-cp /nfs_home/projects/departments/nnrco/genetic_department/share/GATL_GMGZ/GSE178794_adiposeTissue_consensusPeaks-from11samples_unionPeaksInAtLeast3samples_b38.bed atac.bed
+cp genetic_department/share/GATL_GMGZ/GSE178794_adiposeTissue_consensusPeaks-from11samples_unionPeaksInAtLeast3samples_b38.bed atac.bed
 
 # bedtools intersect twice to keep information from the files, just in case
 bedtools intersect -a whradjbmi_combined_hg38_extra_filtered_lifted.bed -b H3K27ac_peaks.bed -wa| bedtools intersect -b H3K27ac_peaks.bed -a - -wb > whradjbmi_combined_hg38_extra_H3K27ac.bed
@@ -105,9 +105,9 @@ wc -l
 ### remove if within 5 kbp of a gene ###
 ################################
 
-#full list of genes in hg38 is here /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt
-# cp /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
-# bedtools slop -i hg38_all_genes.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b 5000 > hg38_all_genes_extended.bed
+#full list of genes in hg38 is here genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt
+# cp genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
+# bedtools slop -i hg38_all_genes.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b 5000 > hg38_all_genes_extended.bed
 # bedtools intersect -v -a whradjbmi_combined_hg38_extra_H3K27ac_ATAC.bed -b hg38_all_genes_extended.bed | wc -l
 # bedtools intersect -v -a whradjbmi_combined_hg38_extra_H3K27ac_ATAC.bed -b hg38_all_genes_extended.bed > whradjbmi_combined_hg38_intergenic.bed
 # ### merging snps within 50+/- kbp of each other
@@ -121,7 +121,7 @@ wc -l
 ################################
 
 # move a list of hg38 genes over 
-cp /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
+cp genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
 
 # merge the snps within 50+/- kbp of each other
 bedtools merge -d 50000 -i whradjbmi_combined_hg38_extra_H3K27ac_ATAC.bed > whradjbmi_combined_hg38_merged.bed
@@ -138,7 +138,7 @@ wc -l 966
 
 # uni supervisor suggested I find the genes close by the clusters, not the snps
 
-bedtools slop -i whradjbmi_combined_hg38_merged.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b 500000 > whradjbmi_combined_hg38_merged_500kbp.bed
+bedtools slop -i whradjbmi_combined_hg38_merged.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b 500000 > whradjbmi_combined_hg38_merged_500kbp.bed
 
 # +/- 500kbp, so a million after expr 
 
@@ -176,10 +176,10 @@ wc -l 370
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_whradjbmi_combined_H3K27ac_ATAC" }' whradjbmi_combined_hg38_clustered.bed | head
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_whradjbmi_combined_H3K27ac_ATAC" }' whradjbmi_combined_hg38_clustered.bed > whradjbmi_combined_hg38_clustered_4col.bed
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo
+cd comp_bio/capture_c_adipocytes/capsequm2/oligo
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_4col.bed
-#/fsx/home_dirs/czjs/doctoral_work/repeat-annotation/RepeatMasker/RepeatMasker -species "Homo sapiens" -pa 4 /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_3/oligo_seqs.fa
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_4col.bed
+#doctoral_work/repeat-annotation/RepeatMasker/RepeatMasker -species "Homo sapiens" -pa 4 comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_3/oligo_seqs.fa
 
 ################################
 ### Making tidy snp file ###
@@ -187,12 +187,12 @@ sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capseq
 
 ## add to the snp files whether or not an oligo could be designed for it
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final
+cd comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final
 
 wc -l oligo_info.txt
 1433
 
-wc -l /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_4col.bed
+wc -l comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_4col.bed
 966
 
 # capsequm designs 2 probes per region, 2*966 = 1932 , 1932-1433 = 499, 499/2 =~ 250 regions either don't have any probe, or have half the probes etc.
@@ -211,7 +211,7 @@ wc -l /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capover
 # chr1    11805747        11805748        rs13306561A:G   0.017   w       4.194e-08       chr1    11801343        11807743        peak_318        chr1    11805513        11806521   peak264 11      3
 
 ## Make key
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1"_"$2"_"$3"_"$4"_cluster_"$17"_whradjbmi_combined_H3K27ac_ATAC" }' whradjbmi_combined_hg38_clustered.bed > temp.txt
 paste whradjbmi_combined_hg38_clustered.bed temp.txt > whradjbmi_combined_hg38_clustered_keyed.bed
@@ -225,7 +225,7 @@ sort -k18,18 whradjbmi_combined_hg38_clustered_keyed.bed > whradjbmi_combined_hg
 
 # 13th column is the key
 # awk '{print $13}' oligo_info.txt| head # quick check
-cp /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final/oligo_info.txt whradjbmi_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_combined_hg38_extra_H3K27ac_ATAC_final/oligo_info.txt whradjbmi_oligo_info.txt
 sort -k13,13 whradjbmi_oligo_info.txt > whradjbmi_oligo_info_sorted.txt
 sed 's/,$//' whradjbmi_oligo_info_sorted.txt > whradjbmi_oligo_info_sorted_no_comma.txt
 sed -i '1d' whradjbmi_oligo_info_sorted_no_comma.txt
@@ -349,11 +349,11 @@ join -j 7 whradjbmi_combined_GTEX_sorted.bed whradjbmi_combined_DAAP6_sorted.bed
 ## All genes, regardless of gene expression:
 # recover the original region sizes to encounter less pain later on:
 
-bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_concatenated_OG.bed
+bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_concatenated_OG.bed
 
 ## GTEX first
 # recover the original region sizes to encounter less pain later on:
-bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed
+bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed
 # change into gene expression column into one that only has the expressed genes, not including the "not expressed"
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {gsub(/,not_expressed/, "", $4); print $1, $2, $3, $4}' whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG_cleaned.bed # wc -l 369
@@ -363,7 +363,7 @@ awk -F'\t' '{print gsub(/,/, "", $4)}' whradjbmi_combined_hg38_merged_500kbp_gen
 
 ## DAAP6 in house next
 # recover the original region sizes to encounter less pain later on:
-bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated_OG.bed
+bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated_OG.bed
 
 # change into gene expression column into one that only has the expressed genes, not including the "not expressed"
 
@@ -488,7 +488,7 @@ head whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets.bed
 
 awk 'BEGIN{OFS="\t"} {key = $1 OFS $2 OFS $3; if (key in a) a[key] = a[key] "," $8; else a[key] = $8} END {for (key in a) {split(key, arr, OFS); print arr[1], arr[2], arr[3], a[key]}}' whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets.bed > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed
 
-bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed
+bedtools slop -i whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {gsub(/,not_in_geneset/, "", $4); print $1, $2, $3, $4}' whradjbmi_combined_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed > whradjbmi_combined_hg38_merged_500kbp_genesets_OG_cleaned.bed # wc -l 441
 
@@ -511,22 +511,22 @@ cat whradjbmi_combined_hg38_tidy_genesets.bed > whradjbmi_combined_hg38_tidy_gen
 ### eQTLS ###
 ################################
 
-# files here /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol
+# files here genetic_department/share/for_GATL/collabs/Carol
 # move some over?
 
-cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/Adipose_Subcutaneous_snps.hg19.bed Adipose_Subcutaneous_snps.hg19.bed 
-cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/AdipoExpress_snps.hg19.bed AdipoExpress_snps.hg19.bed
-cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/FUSION_ge_adipose_naive_snps.hg19.bed FUSION_ge_adipose_naive_snps.hg19.bed
-cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/TwinsUK_ge_fat_snps.hg19.bed TwinsUK_ge_fat_snps.hg19.bed
+cp genetic_department/share/for_GATL/collabs/Carol/Adipose_Subcutaneous_snps.hg19.bed Adipose_Subcutaneous_snps.hg19.bed 
+cp genetic_department/share/for_GATL/collabs/Carol/AdipoExpress_snps.hg19.bed AdipoExpress_snps.hg19.bed
+cp genetic_department/share/for_GATL/collabs/Carol/FUSION_ge_adipose_naive_snps.hg19.bed FUSION_ge_adipose_naive_snps.hg19.bed
+cp genetic_department/share/for_GATL/collabs/Carol/TwinsUK_ge_fat_snps.hg19.bed TwinsUK_ge_fat_snps.hg19.bed
 
 
 
 # all in hg19 so need to convert to hg38
 
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver AdipoExpress_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz AdipoExpress_snps_lifted.bed  unmapped_AdipoExpress_snps.bed
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver Adipose_Subcutaneous_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz Adipose_Subcutaneous_snps_lifted.bed  unmapped_Adipose_Subcutaneous_snps.bed
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver FUSION_ge_adipose_naive_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz FUSION_ge_adipose_naive_snps_lifted.bed  unmapped_FUSION_ge_adipose_naive_snps.bed
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver TwinsUK_ge_fat_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz TwinsUK_ge_fat_snps_lifted.bed  unmapped_TwinsUK_ge_fat_snps.bed
+genetic_department/projects/TargetLookup/liftOver AdipoExpress_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz AdipoExpress_snps_lifted.bed  unmapped_AdipoExpress_snps.bed
+genetic_department/projects/TargetLookup/liftOver Adipose_Subcutaneous_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz Adipose_Subcutaneous_snps_lifted.bed  unmapped_Adipose_Subcutaneous_snps.bed
+genetic_department/projects/TargetLookup/liftOver FUSION_ge_adipose_naive_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz FUSION_ge_adipose_naive_snps_lifted.bed  unmapped_FUSION_ge_adipose_naive_snps.bed
+genetic_department/projects/TargetLookup/liftOver TwinsUK_ge_fat_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz TwinsUK_ge_fat_snps_lifted.bed  unmapped_TwinsUK_ge_fat_snps.bed
 
 
 # 
@@ -548,8 +548,9 @@ head gene_tss_coordinates.bed
 
 # expand by 1 and 2 kbp
 
-bedtools slop -i gene_tss_coordinates.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500 > gene_tss_coordinates_1kbp.bed
-bedtools slop -i gene_tss_coordinates.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -1000 > gene_tss_coordinates_2kbp.bed
+bedtools slop -i gene_tss_coordinates.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500 > gene_tss_coordinates_1kbp.bed
+bedtools slop -i gene_tss_coordinates.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -1000 > gene_tss_coordinates_2kbp.bed
+bedtools slop -i gene_tss_coordinates.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -2500 > gene_tss_coordinates_5kbp.bed
 
 # intersect -v
 
@@ -565,9 +566,9 @@ cat whradjbmi_combined_hg38_2kbp_TSS.bed > whradjbmi_combined_hg38_2kbp_TSS.tsv
 ### Finemapping overlap ###
 ################################
 
-# file is here: /novo/projects/departments/nnrco/genetic_department/share/for_LWMR/tde_hepatocytes_v1/nngene_internal.ukbb_EUR_LGLM_2023.whradjbmi_sexcombined/cs_annotated.tsv
+# file is here: genetic_department/share/for_LWMR/tde_hepatocytes_v1/nngene_internal.ukbb_EUR_LGLM_2023.whradjbmi_sexcombined/cs_annotated.tsv
 
-cp /novo/projects/departments/nnrco/genetic_department/share/for_LWMR/tde_hepatocytes_v1/nngene_internal.ukbb_EUR_LGLM_2023.whradjbmi_sexcombined/cs_annotated.tsv whradjbmi_combined_hg38_finemapping.bed
+cp genetic_department/share/for_LWMR/tde_hepatocytes_v1/nngene_internal.ukbb_EUR_LGLM_2023.whradjbmi_sexcombined/cs_annotated.tsv whradjbmi_combined_hg38_finemapping.bed
 
 #sed -i '1d' whradjbmi_combined_hg38_finemapping.bed # remove 1st row, once. 
 
@@ -576,13 +577,13 @@ cp /novo/projects/departments/nnrco/genetic_department/share/for_LWMR/tde_hepato
 ### dealing with problematic oligos
 ### -------------------------------- ###
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_1/oligo_info.txt whr_oligos_round1.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_1/oligo_info.txt whr_oligos_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_1/leftright_coords_round1.bed whr_oligos_round1_redesign.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_1/leftright_coords_round1.bed whr_oligos_round1_redesign.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_2/oligo_info.txt whr_oligos_round2.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_2/oligo_info.txt whr_oligos_round2.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_2/leftright_coords_round2.bed whr_oligos_round2_redesign.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/25829_2/leftright_coords_round2.bed whr_oligos_round2_redesign.bed
 
 # processed in processing_oligos.R, output is whr_pick_new_snps.bed
 # further processed in processing_snps_whradjbmi.R
@@ -600,24 +601,24 @@ autogen_probes_left_right_modded.R
 
 # manually ran through the R script because it's a pain
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/leftright_coords_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/leftright_coords_round1.bed
 squeue --user=czjs --iterate=30_seconds
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round2/oligo_info.txt whradjbmi_round2_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round2/oligo_info.txt whradjbmi_round2_oligo_info.txt
 
 autogen_probes_left_right_modded.R
 
 processing_snps_whradjbmi.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round3 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/whradjbmi_combined_hg38_selected_snps_round2_capready.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round3 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/whradjbmi_combined_hg38_selected_snps_round2_capready.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round3/oligo_info.txt whradjbmi_reselected_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round3/oligo_info.txt whradjbmi_reselected_oligo_info.txt
 
 autogen_probes_left_right_modded.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_reselected_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/leftright_coords_reselected_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_reselected_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right/leftright_coords_reselected_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_reselected_round2/oligo_info.txt whradjbmi_reselected_oligo_info_round2.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_reselected_round2/oligo_info.txt whradjbmi_reselected_oligo_info_round2.txt
 
 
 
@@ -625,7 +626,7 @@ cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/olig
 ### filtering out SNPs that are exonic
 ### -------------------------------- ###
 
-
+# exon coords are from gencode v39, made in the exon_generator.py script
 bedtools intersect -v -a whradjbmi_combined_hg38_clustered_sorted_final.bed -b exon_coordinates.bed | wc -l #654
 bedtools intersect -v -a whradjbmi_combined_hg38_2kbp_TSS.bed -b exon_coordinates.bed | wc -l #484 from 573
 
@@ -644,7 +645,7 @@ bedtools intersect -a whradjbmi_combined_hg38_clustered_sorted_final.bed -b exon
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_whradjbmi_combined_H3K27ac_ATAC" }' whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS.bed > whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
 
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whr_no_exons_no_TSS /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whr_no_exons_no_TSS comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
 # and then you need to filter to get the selected oligos...use processing_snps
 
 ### REPEAT/ REDO
@@ -659,26 +660,465 @@ autogen_probes_left_right_modded.R whradjbmi_combined_hg38_selected_oligos.bed
 
 # manually ran through the R script because it's a pain
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/leftright_coords_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/leftright_coords_round1.bed
 squeue --user=czjs --iterate=30_seconds
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round2/oligo_info.txt whradjbmi_round2_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round2/oligo_info.txt whradjbmi_round2_oligo_info.txt
 
 autogen_probes_left_right_modded.R whradjbmi_round2_oligo_info.txt
 
 processing_snps_whradjbmi.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round3 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/whradjbmi_combined_hg38_selected_snps_round2_capready.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_round3 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/whradjbmi_combined_hg38_selected_snps_round2_capready.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round3/oligo_info.txt whradjbmi_reselected_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_round3/oligo_info.txt whradjbmi_reselected_oligo_info.txt
 
 autogen_probes_left_right_modded.R whradjbmi_reselected_oligo_info.txt
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_reselected_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/leftright_coords_reselected_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh whradjbmi_reselected_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/leftright_coords_reselected_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_reselected_round2/oligo_info.txt whradjbmi_reselected_oligo_info_round2.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/whradjbmi_reselected_round2/oligo_info.txt whradjbmi_reselected_oligo_info_round2.txt
 
 autogen_probes_left_right_modded.R whradjbmi_reselected_oligo_info_round2.txt
 
-/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/processing_oligos_whr.R
+comp_bio/capture_c_adipocytes/capoverlaps/processing_oligos_whr.R
+
+
+### -------------------------------- ###
+### TSS and gene body intersections with peaky mpcc
+### -------------------------------- ###
+
+cat ../peaky/M1/plot_sig_mpcc.bedGraph > sig_mpcc.bed #wc -l 4594 sig_mpcc.bed
+
+bedtools intersect -a sig_mpcc.bed -b gene_tss_coordinates_5kbp.bed -wo> sig_mpcc_gene_tss_5kbp.bed # wc -l 597 sig_mpcc_gene_tss_5kbp.bed
+
+bedtools intersect -a sig_mpcc.bed -b hg38_all_genes.bed -wo > sig_mpcc_gene_bodies.bed # wc -l 2642 sig_mpcc_gene_bodies.bed
+
+bedtools intersect -a sig_mpcc.bed -b hg38_all_genes_extended.bed -wo > sig_mpcc_gene_bodies_5kbp.bed #wc -l 3422 sig_mpcc_gene_bodies_5kbp.bed
+
+
+bedtools intersect -wo -a Adipose_Subcutaneous_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > Adipose_Subcutaneous_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a AdipoExpress_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > AdipoExpress_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a FUSION_ge_adipose_naive_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > FUSION_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a TwinsUK_ge_fat_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > TwinsUK_intersect_peaky_called_genes.bed
+
+
+### -------------------------------- ###
+### TSS and gene body intersections with CHiCANE peaks
+### -------------------------------- ###
+
+
+cd comp_bio/capture_c_adipocytes/CHiCANE
+
+cat M1_results_005_bedtools.txt > M1_results_005_bedtools.bed # wc -l 
+
+bedtools intersect -a M1_results_005_bedtools.bed -b ../capoverlaps/gene_tss_coordinates_5kbp.bed -wo> M1_results_005_gene_tss_5kbp.bed # wc -l # 237
+
+cat M1_results_005_bedtools_peaky_distances.txt > M1_results_005_bedtools_peaky_distances.bed # wc -l 
+
+bedtools intersect -a M1_results_005_bedtools_peaky_distances.bed -b ../capoverlaps/gene_tss_coordinates_5kbp.bed -wo> M1_results_005_gene_tss_5kbp_peaky_distances.bed # wc -l # 27
+
+### ok with the actual final chicanes
+
+
+bedtools intersect -a M1_results_005_bedtools_peaky_distances.bed -b ../capoverlaps/gene_tss_coordinates_5kbp.bed -wo> M1_results_005_gene_tss_5kbp_peaky_distances.bed # wc -l # 27
+
+
+### -------------------------------- ###
+### Mappability
+### -------------------------------- ###
+# mamba install ucsc-bigWigSummary
+mamba install ucsc-bigWigInfo
+
+bigWigInfo comp_bio/capture_c_adipocytes/main_capture_analysis/capcruncher_output/results/DAAP6mADs_M1/bigwigs/norm/DAAP6mADs_M1_chr1_2234479_2234480_rs12061341_cluster_1_T2D_EUR_H3K27ac_ATAC.bigWig
+
+bigWigSummary comp_bio/capture_c_adipocytes/main_capture_analysis/capcruncher_output/results/DAAP6mADs_M1/bigwigs/norm/DAAP6mADs_M1_chr1_2234479_2234480_rs12061341_cluster_1_T2D_EUR_H3K27ac_ATAC.bigWig chr1 2230000 2240000 1 
+
+
+### -------------------------------- ###
+### excluding regions within 250kbp of each other
+### -------------------------------- ###
+
+bedtools cluster -i master_fragment_key.bed -d 250000 > master_250kbp.bed
+
+### -------------------------------- ###
+### blacklisting
+### -------------------------------- ###
+
+cd ref_genomes
+
+wget https://github.com/Boyle-Lab/Blacklist/raw/refs/heads/master/lists/hg38-blacklist.v2.bed.gz
+
+gunzip hg38-blacklist.v2.bed.gz # wc -l 636
+
+cd peak_comparisons
+
+bedtools intersect -a ../ref_genomes/hg38-blacklist.v2.bed -b comp_bio/capture_c_adipocytes/CHiCANE/M1_results_005_bedtools.bed -wo > blacklist_chicane.bed # wc -l 159
+
+# expand the blacklist regions a little?
+
+bedtools slop -i hg38-blacklist.v2.bed -g sizes.hg.38.fai -b 2500 > ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed
+
+bedtools intersect -a ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -b comp_bio/capture_c_adipocytes/CHiCANE/M1_results_005_bedtools.bed -wo > blacklist_5kbp_chicane.bed # wc -l 160
+
+# repeat with peaky
+
+cat comp_bio/capture_c_adipocytes/peaky/M1_all/plot_all_mpcc.bedGraph > peaky_mpcc.bed  ### intervene here to get peak counts
+
+bedtools intersect -a ../ref_genomes/hg38-blacklist.v2.bed -b peaky_mpcc.bed -wo > blacklist_peaky.bed # wc -l 485
+
+bedtools intersect -a ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -b peaky_mpcc.bed -wo > blacklist_5kbp_peaky.bed # wc -l 535
+
+# ok so this tells me that I definitely have sig peaks in blacklisted regions
+# but I want to try and remove these regions before I run the peak calling...
+
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6pADs_P1_unproc.bed -v > blacklist_5kbp_P1.bed # wc -l 5817141
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6pADs_P2_unproc.bed -v > blacklist_5kbp_P2.bed # wc -l 7406622
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6pADs_P3_unproc.bed -v > blacklist_5kbp_P3.bed # wc -l 9275910
+
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6mADs_M1_unproc.bed -v > blacklist_5kbp_M1.bed # wc -l 20321001
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6mADs_M2_unproc.bed -v > blacklist_5kbp_M2.bed # wc -l 8987159
+bedtools intersect -b ../ref_genomes/hg38-blacklist.v2_slop_5kbp.bed -a DAAP6mADs_M3_unproc.bed -v > blacklist_5kbp_M3.bed # wc -l 16610029
+
+### -------------------------------- ###
+### chicane merging
+### -------------------------------- ###
+
+sort -k1,1 -k2,2n combined_results_005_M_blacklisted_only_final.bed > combined_results_005_M_blacklisted_only_final_sorted.bed
+sort -k1,1 -k2,2n combined_results_005_P_blacklisted_only_final.bed > combined_results_005_P_blacklisted_only_final_sorted.bed
+
+bedtools merge -i combined_results_005_M_blacklisted_only_final_sorted.bed -d 10000  
+
+# Create a loop to merge with different distances
+for distance in 100 200 500 1000 2000 5000 10000 20000 30000 40000 50000 80000 100000 120000 150000; do
+    echo "Merging with distance: $distance bp"
+    bedtools merge -i combined_results_005_M_blacklisted_only_final_sorted.bed -d $distance > merged_chicane_M_${distance}.bed
+    
+    # Count and display the number of regions after merging
+    count=$(wc -l < merged_chicane_M_${distance}.bed)
+    echo "Number of merged regions: $count"
+    echo "---------------------------------"
+done
+
+### choosing to use 10,000 bp distance
+
+sort -k1,1 -k2,2n combined_results_005_M_blacklisted_only_final_fulltable.bed > combined_results_005_M_blacklisted_only_final_fulltable_sorted.bed
+sort -k1,1 -k2,2n combined_results_005_P_blacklisted_only_final_fulltable.bed > combined_results_005_P_blacklisted_only_final_fulltable_sorted.bed
+
+### important files made here, will be used downstream for overlaps with genes and TSS!!!
+# min over mean, we want the strongest representative peak
+# sum of the count data for downstream analysis
+# files comes from chicane_test.R
+bedtools merge -i ../CHiCANE/combined_results_005_P_blacklisted_only_final_fulltable_sorted.bed -d 5000  -c 17,17,4,5,6,4,5,6,11 -o min,collapse,distinct,distinct,distinct,collapse,collapse,collapse,max > merged_chicane_P_5000_fulltable.bed
+ # this option makes keeping useful information a bit difficult, but I can't assume that all the viewpoints are unique, because they aren't. 
+ #so I will keep the values in separate columns...
+bedtools merge -i ../CHiCANE/combined_results_005_M_blacklisted_only_final_fulltable_sorted.bed -d 5000  -c 17,17,4,5,6,4,5,6,11 -o min,collapse,distinct,distinct,distinct,collapse,collapse,collapse,max  > merged_chicane_M_5000_fulltable.bed
+
+
+### need to make some column indicating multiple viewpoints nominate the same peak
+awk '
+BEGIN { FS="\t"; OFS="\t" }
+{
+    # Split columns into arrays
+    split($5, scores, ",");
+    split($9, chrs, ",");
+    split($10, starts, ",");
+    split($11, stops, ",");
+
+    # Initialize variables for min score and its index
+    min_score = 1e9;
+    min_index = -1;
+
+    # Initialize a set to track unique chr:start:stop combinations
+    unique_combinations = 0;
+    delete seen;
+
+    # Iterate through the arrays
+    for (i = 1; i <= length(scores); i++) {
+        # Track unique chr:start:stop combinations
+        combination = chrs[i] ":" starts[i] ":" stops[i];
+        if (!(combination in seen)) {
+            seen[combination] = 1;
+            unique_combinations++;
+        }
+
+        # Find the minimum score and its index
+        if (scores[i] < min_score) {
+            min_score = scores[i];
+            min_index = i;
+        }
+    }
+
+    # Determine if the row has multiple unique viewpoints
+    has_multiple_viewpoints = (unique_combinations > 1) ? "TRUE" : "FALSE";
+
+    # Output the row with the min score, corresponding chr:start:stop, and multiple viewpoints flag
+    if (min_index > 0) {
+        print $1, $2, $3, $4, $12, has_multiple_viewpoints, \
+              chrs[min_index], starts[min_index], stops[min_index], min_score;
+    }
+}
+' merged_chicane_M_5000_fulltable.bed > merged_chicane_M_5000_fulltable_with_scores.bed
+#' merged_chicane_P_10000_fulltable.bed > merged_chicane_P_10000_fulltable_with_scores.bed #merged_chicane_M_10000_fulltable.bed > merged_chicane_M_10000_fulltable_with_scores.bed
+
+
+### -------------------------------- ###
+### peaky merging
+### -------------------------------- ###
+cat plot_sig_mpcc.bedGraph > plot_sig_mpcc.bed 
+sort -k1,1 -k2,2n plot_sig_mpcc.bed > plot_sig_mpcc_sorted.bed # wc -l # 1061
+
+# Create a loop to merge with different distances
+for distance in 100 200 500 1000 2000 5000 10000 20000 30000 40000 50000 80000 100000 120000 150000; do
+    echo "Merging with distance: $distance bp"
+    bedtools merge -i plot_sig_mpcc_sorted.bed -d $distance > peaky_${distance}.bed
+    
+    # Count and display the number of regions after merging
+    count=$(wc -l < peaky_${distance}.bed)
+    echo "Number of merged regions: $count"
+    echo "---------------------------------"
+done
+
+### important files made here, will be used downstream for overlaps with genes and TSS!!!
+# max over mean, we want the strongest representative peak
+# also sum of the count data for downstream analysis
+bedtools merge -i ../peaky/M_all_blacklisted/plot_sig_mpcc_sorted.bed -d 5000  -c 4,4,5,6,7,5,6,7,8 -o max,collapse,distinct,distinct,distinct,collapse,collapse,collapse,max > merged_peaky_M_5000_fulltable.bed
+bedtools merge -i ../peaky/P_all_blacklisted/plot_sig_mpcc_sorted.bed -d 5000  -c 4,4,5,6,7,5,6,7,8 -o max,collapse,distinct,distinct,distinct,collapse,collapse,collapse,max > merged_peaky_P_5000_fulltable.bed
+
+
+awk '
+BEGIN { FS="\t"; OFS="\t" }
+{
+    # Split columns into arrays
+    split($5, scores, ",");
+    split($9, chrs, ",");
+    split($10, starts, ",");
+    split($11, stops, ",");
+
+    # Initialize variables for max score and its index
+    max_score = -1e9;
+    max_index = -1;
+
+    # Initialize a set to track unique chr:start:stop combinations
+    unique_combinations = 0;
+    delete seen;
+
+    # Iterate through the arrays
+    for (i = 1; i <= length(scores); i++) {
+        # Track unique chr:start:stop combinations
+        combination = chrs[i] ":" starts[i] ":" stops[i];
+        if (!(combination in seen)) {
+            seen[combination] = 1;
+            unique_combinations++;
+        }
+
+        # Find the maximum score and its index
+        if (scores[i] > max_score) {
+            max_score = scores[i];
+            max_index = i;
+        }
+    }
+
+    # Determine if the row has multiple unique viewpoints
+    has_multiple_viewpoints = (unique_combinations > 1) ? "TRUE" : "FALSE";
+
+    # Output the row with the max score, corresponding chr:start:stop, and multiple viewpoints flag
+    if (max_index > 0) {
+        print $1, $2, $3, $4, $12, has_multiple_viewpoints, \
+              chrs[max_index], starts[max_index], stops[max_index], max_score;
+    }
+}
+' merged_peaky_P_5000_fulltable.bed > merged_peaky_P_5000_fulltable_with_scores.bed #merged_peaky_M_5000_fulltable.bed > merged_peaky_M_5000_fulltable_max.bed
+### -------------------------------- ###
+### peak comparisons
+### -------------------------------- ###
+
+/nfs_home/users/czjs/miniconda3/envs/fullcap/bin/python gene_list_generator.py
+
+bedtools slop -i ../capoverlaps/gene_body_coordinates.bed -g ../ref_genomes/sizes.hg.38.fai -b -2500 > gene_body_coordinates_5kbp.bed
+
+### ok continuing
+
+# the mature datasets
+bedtools slop -i ../peaky/M_all_blacklisted/peaky_5000.bed -g ../ref_genomes/sizes.hg.38.fai -b 3000 > peaky_M_5000_slop_6kbp.bed # wc -l 410
+
+bedtools intersect -a peaky_M_5000_slop_6kbp.bed -b ../CHiCANE/merged_chicane_M_10000.bed > peaky_M_5000_slop_6kbp_chicane_10000.bed #| wc -l # 57
+
+
+# the preadipocytes 
+bedtools slop -i ../peaky/P_all_blacklisted/peaky_5000.bed -g ../ref_genomes/sizes.hg.38.fai -b 3000 > peaky_P_5000_slop_6kbp.bed # wc -l 458
+
+bedtools intersect -a peaky_P_5000_slop_6kbp.bed -b ../CHiCANE/merged_chicane_P_10000.bed > peaky_P_5000_slop_6kbp_chicane_10000.bed #| wc -l # 64
+
+
+### TSS and chicane
+# mature
+#bedtools intersect -a merged_chicane_M_10000_fulltable_min.bed -b ../capoverlaps/gene_tss_coordinates_5kbp.bed -wo > merged_chicane_M_10000_fulltable_TSS_5kbp.bed # wc -l # 198
+bedtools intersect -a merged_chicane_M_5000_fulltable_with_scores.bed -b testing_TSS_sorted_5000.bed -wo > merged_chicane_M_5000_fulltable_TSS_10kbp.bed #238
+
+# preads
+bedtools intersect -a merged_chicane_P_5000_fulltable_with_scores.bed -b testing_TSS_sorted_5000.bed -wo > merged_chicane_P_5000_fulltable_TSS_10kbp.bed # 236
+
+
+### Gene body and chicane
+# mature
+bedtools intersect -a merged_chicane_M_5000_fulltable_with_scores.bed -b gene_body_coordinates_5kbp.bed -wo > merged_chicane_M_5000_fulltable_genebody_5kbp.bed # wc -l # 493
+# preads
+bedtools intersect -a merged_chicane_P_5000_fulltable_with_scores.bed -b gene_body_coordinates_5kbp.bed -wo > merged_chicane_P_5000_fulltable_genebody_5kbp.bed # wc -l # 543
+
+
+### TSS and peaky
+# mature
+bedtools intersect -a merged_peaky_M_5000_fulltable_with_scores.bed -b testing_TSS_sorted_5000.bed -wo > merged_peaky_M_5000_fulltable_TSS_10kbp.bed # wc -l # 176
+# preads
+bedtools intersect -a merged_peaky_P_5000_fulltable_with_scores.bed -b testing_TSS_sorted_5000.bed -wo > merged_peaky_P_5000_fulltable_TSS_10kbp.bed # wc -l # 175
+
+
+### Gene body and peaky
+# mature
+bedtools intersect -a merged_peaky_M_5000_fulltable_with_scores.bed -b gene_body_coordinates_5kbp.bed -wo > merged_peaky_M_5000_fulltable_genebody_5kbp.bed # wc -l # 254
+# preads
+bedtools intersect -a merged_peaky_P_5000_fulltable_with_scores.bed -b gene_body_coordinates_5kbp.bed -wo > merged_peaky_P_5000_fulltable_genebody_5kbp.bed # wc -l # 294
+
+####### hop over to final_gene_list.Rmd, till eqtl section ########
+
+### eqtl overlaps
+bedtools intersect -wo -a ../capoverlaps/Adipose_Subcutaneous_snps_lifted.bed -b all_called_unique_genes.bed > Adipose_Subcutaneous_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a ../capoverlaps/AdipoExpress_snps_lifted.bed -b all_called_unique_genes.bed > AdipoExpress_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a ../capoverlaps/FUSION_ge_adipose_naive_snps_lifted.bed -b all_called_unique_genes.bed > FUSION_intersect_peaky_called_genes.bed
+
+bedtools intersect -wo -a ../capoverlaps/TwinsUK_ge_fat_snps_lifted.bed -b all_called_unique_genes.bed > TwinsUK_intersect_peaky_called_genes.bed
+
+### how many peaks do I have?
+cd peak_comparisons
+wc -l merged_chicane_M_5000_fulltable_with_scores.bed #1149
+wc -l merged_chicane_P_5000_fulltable_with_scores.bed #1156
+
+wc -l merged_peaky_M_5000_fulltable_with_scores.bed #410
+wc -l merged_peaky_P_5000_fulltable_with_scores.bed #458
+
+# total peaks = 3173
+
+### how many significant peaks do I have? 
+
+awk '$4<=0.05' merged_chicane_M_5000_fulltable_with_scores.bed | wc -l
+# never mind, the peaks are already significant when they were saved from chicane_test.r and peaky.r
+
+### need to check the overlaps in ucsc...
+
+awk '{print $1, $2, $3}' hg38_all_genes_extended.bed > ../peak_comparisons/hg38_all_genes_extended_3col.bed
+
+awk '{print $1, $2, $3}' gene_body_coordinates_5kbp.bed > gene_body_coordinates_5kbp_3col.bed
+
+awk '{print $1, $2, $3}' chicane_TSS_5000.bed > chicane_TSS_5000_3col.bed
+
+
+
+
+awk '{print $1, $2, $3}' merged_chicane_M_5000_fulltable_TSS_10kbp.bed > merged_chicane_M_5000_fulltable_TSS_10kbp_3col.bed
+awk '{print $1, $2, $3}' merged_chicane_P_5000_fulltable_TSS_10kbp.bed > merged_chicane_P_5000_fulltable_TSS_10kbp_3col.bed
+
+awk '{print $1, $2, $3}' merged_peaky_M_5000_fulltable_TSS_10kbp.bed > merged_peaky_M_5000_fulltable_TSS_10kbp_3col.bed
+awk '{print $1, $2, $3}' merged_peaky_P_5000_fulltable_TSS_10kbp.bed > merged_peaky_P_5000_fulltable_TSS_10kbp_3col.bed
+
+awk '{print $1, $2, $3}' testing_TSS_sorted_5000.bed > testing_TSS_sorted_5000_3col.bed
+
+
+
+### check if there is a plateau with the distances of TSSs
+
+cat ../capoverlaps/gene_tss_coordinates.bed > testing_TSS.bed 
+sort -k1,1 -k2,2n testing_TSS.bed > testing_TSS_sorted.bed # wc -l # 1061
+
+# Create a loop to intersect with different distances
+for distance in 1000 2000 3000 4000 5000 6000 7000 8000 9000 10000 12000 15000; do
+    echo "Intersecting with distance: $distance bp"
+
+    bedtools slop -i testing_TSS_sorted.bed -g ../ref_genomes/sizes.hg.38.fai -b $distance > testing_TSS_sorted_${distance}.bed 
+    bedtools intersect -a merged_chicane_M_10000_fulltable_min.bed -b testing_TSS_sorted_${distance}.bed -wo > chicane_TSS_${distance}.bed
+
+    # Count and display the number of regions after merging
+    count=$(wc -l < chicane_TSS_${distance}.bed)
+    echo "Number of chicane:gene overlaps: $count"
+    echo "---------------------------------"
+done
+
+### Get all genes that are in chicanes range and subtract the ones nominated by chicane + peaky
+
+
+
+bedtools slop -i comp_bio/capture_c_adipocytes/main_capture_analysis/unique_restriction_fragments.bed -g ../ref_genomes/sizes.hg.38.fai -b 50000 > unique_restriction_fragments_1mbp.bed 
+
+bedtools intersect -a unique_restriction_fragments_1mbp.bed -b ../capoverlaps/gene_tss_coordinates_5kbp.bed -wo > gene_tss_in_1mbp.bed # wc -l # 799
+unique(heatmap_data$DAAP6_direction)
+
+
+
+### -------------------------------- ###
+### GSEA 
+### -------------------------------- ###
+
+### download pathways
+
+wget https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/h.all.v2024.1.Hs.symbols.gmt
+
+wget https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt
+
+wget https://data.broadinstitute.org/gsea-msigdb/msigdb/release/2024.1.Hs/c2.cp.kegg_medicus.v2024.1.Hs.symbols.gmt
+
+### -------------------------------- ###
+### Checking some RSIDs with ZFP36L2 
+### -------------------------------- ###
+
+# remove header
+sed -i '1d' GTEx_Portal_ZFP36L2_adipose.csv 
+
+
+awk 'BEGIN{OFS=","; FS=OFS} {gsub(/[""]/, "",$3) ; print $3}' GTEx_Portal_ZFP36L2_adipose.csv | awk 'BEGIN{OFS="_"; FS=OFS} {print $1, $2 }' |  awk 'BEGIN{OFS="_"; FS=OFS} {gsub(/[_]/,"\t"); print}' | awk 'BEGIN{OFS="\t"; FS=OFS}  {print $1, $2, $2+1}' > gtex_zfp_adipose_eqtls.bed
+
+
+### -------------------------------- ###
+### making figures on ucsc: tracks depicting snp filtering process
+### -------------------------------- ###
+
+######## can't visualise these tracks because they're not on the same genome build
+# ### before filtering
+cd genetic_department/projects/TargetLookup/harmonized_data/harmonized_gwas # permission denied :(
+
+zcat whradjbmi.giant-ukbb.meta-analysis.combined.23May2018.txt.gz | head
+
+zcat whradjbmi.giant-ukbb.meta-analysis.combined.23May2018.txt.gz | awk -F'\t' '$11 < 0.00000005'| gzip >  comp_bio/capture_c_adipocytes/capoverlaps/whradjbmi_combined_filtered.gz 
+
+
+cd comp_bio/capture_c_adipocytes/capoverlaps
+
+# awk '{print $1, $2, $3}'
+
+# ### after filtering by genome level significance:
+
+# awk '{print $1, $2, $3}' 
+
+### after liftover + overlap with epigenetics:
+
+awk '{print $1, $2, $3}' whradjbmi_combined_hg38_extra_H3K27ac_ATAC.bed > whr_966_snps_ucsc.bed
+
+### after removing exonic snps, snps close to TSSs
+
+awk '{print $1, $2, $3}' whradjbmi_combined_hg38_clustered_sorted_final_no_exons_no_TSS.bed > whr_484_snps_ucsc.bed
+
+
+### after grouping snps into regions
+
+awk '{print $1, $2, $3}' whradjbmi_combined_hg38_merged_500kbp_genes_concatenated_OG.bed > whr_370_regions_ucsc.bed
+
+
+### after designing probes for snps:
+
+awk '{print $1, $2, $3}' whr_no_overlap_rows.bed > whr_180_probes_ucsc.bed 
+
 

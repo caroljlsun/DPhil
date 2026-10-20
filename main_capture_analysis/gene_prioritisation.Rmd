@@ -1,0 +1,483 @@
+---
+title: "Gene Prioritisation"
+author: "CZJS"
+date: "2025-03-07"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+pacman::p_unload(pacman::p_loaded(), character.only = TRUE) 
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/main_capture_analysis")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+```
+
+Procedure: Prioritise the genes called from peaky MPCC overlaps
+
+Project: Capture C
+
+User: CZJS
+
+Date: Mar-2025
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(knitr)
+library(kableExtra)
+```
+
+# TD LIST
+
+-   check the viewpoints which have eQTLs and check if they overlap the gene they are for
+-   prioritise interactions with TSS
+-   prioritise if relatively highly expressed in adipocytes - daap6 excel
+-   whether it is the nearest gene
+-   relevant GO terms (chromatin genes)
+-   HuGeAMP BioIndex relevant gwas term
+-   column specifying strongest non-tss interaction
+-   druggable
+-   inhibitor exists
+-   ~~rewrite peaky loop functions~~
+-   simple update presentation (10 slides) 1) to rob/enriques 2) discovery bio 3) draft to goutham, mar and laura (get a draft in a meeting with mvrm, sometime next week)
+-   ~~check numbers of tss vs gene body overlaps~~
+
+```{r genes}
+
+gene_bodies <- fread("comp_bio/capture_c_adipocytes/capoverlaps/sig_mpcc_gene_tss_5kbp.bed")
+
+unique_genes <- distinct(gene_bodies, V11, .keep_all = TRUE)
+
+
+#### chicane on 5e6 max distance
+gene_bodies_chicane <- fread("comp_bio/capture_c_adipocytes/CHiCANE/M1_results_005_gene_tss_5kbp.bed")
+
+unique_genes_chicane <- distinct(gene_bodies_chicane, V18, .keep_all = TRUE)
+table(unique_genes$V11 %in% unique_genes_chicane$V18)
+
+which(unique_genes$V11 %in% unique_genes_chicane$V18)
+
+unique_genes[which(unique_genes$V11 %in% unique_genes_chicane$V18)]
+
+
+#### chicane on peaky distances
+
+gene_bodies_chicane_peaky <- fread("comp_bio/capture_c_adipocytes/CHiCANE/M1_results_005_gene_tss_5kbp_peaky_distances.bed")
+
+unique_genes_chicane_peaky <- distinct(gene_bodies_chicane_peaky, V18, .keep_all = TRUE)
+table(unique_genes$V11 %in% unique_genes_chicane_peaky$V18)
+
+which(unique_genes$V11 %in% unique_genes_chicane_peaky$V18)
+
+unique_genes[which(unique_genes$V11 %in% unique_genes_chicane_peaky$V18)]
+
+```
+
+```{r eQTL}
+
+# eQTL check --------------------------------------------------------------
+
+# the eQTL files are massive so instead of loading them into R, process in the command line
+# wrangle so the first 3 columns are the baits, bc we want to know if the eQTLs at the bait predict the genes overlapped
+eQTL_unique_genes <- unique_genes %>% 
+    relocate(c(V5, V6, V7), .before = V1)
+
+#write_tsv(as.data.frame(eQTL_unique_genes), "peaky_called_unique_genes.bed", col_names = F)
+
+# bedtools intersect -wo -a Adipose_Subcutaneous_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > Adipose_Subcutaneous_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a AdipoExpress_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > AdipoExpress_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a FUSION_ge_adipose_naive_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > FUSION_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a TwinsUK_ge_fat_snps_lifted.bed -b ../main_capture_analysis/peaky_called_unique_genes.bed > TwinsUK_intersect_peaky_called_genes.bed
+
+
+TwinsUK <- fread("comp_bio/capture_c_adipocytes/capoverlaps/TwinsUK_intersect_peaky_called_genes.bed")
+FUSION <- fread("comp_bio/capture_c_adipocytes/capoverlaps/FUSION_intersect_peaky_called_genes.bed")
+# AdipoExpress <- fread("comp_bio/capture_c_adipocytes/capoverlaps/AdipoExpress_intersect_peaky_called_genes.bed") # has too many unuseable gene IDs, have to ask genetics ppl like GATL when he's back
+Adipose_Subcutaneous <- fread("comp_bio/capture_c_adipocytes/capoverlaps/Adipose_Subcutaneous_intersect_peaky_called_genes.bed")
+
+
+# merge/collapse/unique
+
+all_eQTLs <- bind_rows(TwinsUK, FUSION, Adipose_Subcutaneous, .id = "origin") # excluded AdipoExpress for now
+
+has_eQTLs <- all_eQTLs %>% 
+    dplyr::select(fragment_chr = V5, fragment_start = V6, fragment_stop = V7,
+           eQTL_gene = V4, MPCC = V11, peaky_nominated = V15) %>% 
+    group_by(fragment_chr, fragment_start, fragment_stop)
+
+
+# Map eQTL genes to official symbols
+eqtl_mapped <- mapIds(org.Hs.eg.db, keys = has_eQTLs$eQTL_gene, column = "SYMBOL", keytype = "ALIAS", multiVals = "first")
+eqtl_mapped_table <- as.data.frame(eqtl_mapped) %>% 
+    cbind(original_eqtl_names = names(eqtl_mapped)) 
+
+
+# Map peaky genes to official symbols
+hg38_mapped <- mapIds(org.Hs.eg.db, keys = has_eQTLs$peaky_nominated, column = "SYMBOL", keytype = "ALIAS", multiVals = "first")
+hg38_mapped_table <- as.data.frame(hg38_mapped) %>% 
+    cbind(original_hg38_names = names(hg38_mapped))
+
+# Map peaky genes to official symbols, from ensemblIDs
+hg38_mapped_ens <- mapIds(org.Hs.eg.db, keys = has_eQTLs$peaky_nominated, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+hg38_mapped_table_ens <- as.data.frame(hg38_mapped_ens) %>% 
+    cbind(original_hg38_ens_names = names(hg38_mapped_ens)) 
+
+
+
+### merge and continue 
+
+
+# cbind bc they're all the one size, should be the same 
+eQTLs_genes_unified <- cbind(has_eQTLs, unified_eQTL_name =eqtl_mapped_table$eqtl_mapped, unified_peaky_name = hg38_mapped_table$hg38_mapped)
+
+eQTLs_genes_unified$unified_peaky_name <- ifelse(is.na(eQTLs_genes_unified$unified_peaky_name),
+                                               hg38_mapped_table_ens$hg38_mapped_ens,
+                                               eQTLs_genes_unified$unified_peaky_name)
+
+
+
+expanded <- eQTLs_genes_unified %>% 
+    mutate(is_nominated_by_eQTL = ifelse(unified_eQTL_name == unified_peaky_name, TRUE, FALSE)) %>% 
+    distinct()
+
+
+# add daap6 etc.
+# above stringent threshold
+# above standard threshold
+
+
+# add daap8
+# above stringent threshold
+# above standard threshold
+
+
+```
+
+```{r expression}
+
+# DAAP6 expression --------------------------------------------------------
+
+DAAP6_expression <- fread("DAAP6_RNAseq_results_APs_v_mADs.csv")
+
+### careful, need to unify the genes again
+
+# first the unique genes
+# Map genes to official symbols
+unique_genes_mapped <- mapIds(org.Hs.eg.db, keys = unique_genes$V11, column = "SYMBOL", keytype = "ALIAS", multiVals = "first")
+unique_genes_mapped_table <- as.data.frame(unique_genes_mapped) %>% 
+    cbind(original_unique_names = names(unique_genes_mapped)) 
+
+# Map ensembl genes to official symbols, from ensemblIDs
+unique_mapped_ens <- mapIds(org.Hs.eg.db, keys = unique_genes$V11, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+unique_mapped_table_ens <- as.data.frame(unique_mapped_ens) %>% 
+    cbind(original_unique_ens_names = names(unique_mapped_ens)) 
+
+#cbind is fine, same sizes
+unique_genes_unified <- cbind(unique_genes, unified_unique_gene_name = unique_genes_mapped_table$unique_genes_mapped)
+
+unique_genes_unified$unified_unique_gene_name <- ifelse(is.na(unique_genes_unified$unified_unique_gene_name),
+                                               unique_mapped_table_ens$unique_mapped_ens,
+                                               unique_genes_unified$unified_unique_gene_name)
+
+# then the DAAP6_expression
+
+DAAP6_mapped <- mapIds(org.Hs.eg.db, keys = DAAP6_expression$symbol, column = "SYMBOL", keytype = "ALIAS", multiVals = "first")
+# gives large list...
+DAAP6_mapped_table <- stack(DAAP6_mapped) %>% 
+    dplyr::rename(original_gene_symbol = ind, unified_gene_symbol = values)
+
+
+# no ensembl gene ids in the DAAP6 dataset thankfully
+
+DAAP6_genes_unified <- cbind(DAAP6_expression, unified_DAAP6_gene_name = DAAP6_mapped_table$unified_gene_symbol)
+
+###
+
+unique_expression <- merge(unique_genes_unified, DAAP6_genes_unified, by.x = "unified_unique_gene_name", by.y = "unified_DAAP6_gene_name")
+
+temp_expanded <- left_join(expanded, unique_expression, by = c("unified_peaky_name" = "V11"))
+
+###
+
+expanded_expression <- temp_expanded %>% 
+    mutate(has_differential_exp_data = ifelse(unified_unique_gene_name == unified_peaky_name, TRUE, FALSE),
+           gene_description = description,
+           DAPP6_log2foldchange = log2FoldChange,
+           DAAP6_padj = padj,
+           DAAP6_direction = direction,
+           DAAP6_unified_gene = unified_unique_gene_name,
+           pass_standard_threshold_diff = ifelse(abs(log2FoldChange) > 1 & padj < 0.05 ,TRUE, FALSE),
+           pass_stringent_threshold_diff = ifelse(abs(log2FoldChange) > 1.6 & padj < 0.01,TRUE, FALSE)) %>% 
+    dplyr::select(-(starts_with("V")), -symbol, -biotype, -description, -log2FoldChange, -padj, -direction, -unified_unique_gene_name) %>% 
+    distinct()
+
+
+# table(unique_expression$direction)
+# hist(unique_expression$log2FoldChange, breaks = 30)
+# 
+# hist(unique_expression$padj)
+# 
+# table(unique_expression$padj <0.05)
+# table(unique_expression$padj <0.01)
+# 
+# table(unique_expression$log2FoldChange < -1 | unique_expression$log2FoldChange > 1)
+# table(abs(unique_expression$log2FoldChange)> 1)
+# 
+# table(unique_expression$log2FoldChange < -1.6 | unique_expression$log2FoldChange > 1.6)
+
+
+unique_expression_thresholded <- unique_expression %>% 
+    transmute(padj_005 = unique_expression$padj <0.05,
+              padj_001 = unique_expression$padj <0.01, 
+              log_1 = unique_expression$log2FoldChange < -1 | unique_expression$log2FoldChange > 1,
+              log_16 = unique_expression$log2FoldChange < -1.6 | unique_expression$log2FoldChange > 1.6)
+
+thresholded_long <- unique_expression_thresholded %>%
+    pivot_longer(cols = everything(), names_to = "threshold", values_to = "value")
+
+# Create a summary data frame with counts of true vs false for each threshold
+summary_df <- thresholded_long %>%
+    group_by(threshold, value) %>%
+    summarise(count = n()) %>%
+    ungroup()
+
+# Create the grouped bar chart
+ggplot(summary_df, aes(x = threshold, y = count, fill = value)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_text(aes(label = count), position = position_dodge(width = 0.9), vjust = -0.5) +
+    labs(title = "Different Thresholds",
+         x = "Threshold",
+         y = "Count",
+         fill = "Value") +
+    theme_minimal()
+# different thresholds
+# padj < 0.05
+# padj < 0.01
+# log2fold threshold of +/-1 (translates to 2 fold)
+# or log2fold threshold of +/- 1.6 (translates to 3 fold)
+
+# insulin resistance screen BBND, same padj and log2fold thresholding (if she has gene counts?, or caesar)
+# 8 pie charts 
+# one per threshold
+
+ggplot(summary_df, aes(x = threshold, y = count, fill = value)) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = count), position = position_stack(vjust = 0.5)) +
+    labs(title = "Different Thresholds",
+         x = "Threshold",
+         y = "Count",
+         fill = "Value") +
+    theme_minimal()
+
+# use log fold change of 1, padj = 0.01
+
+### merge onto the expanded table
+
+
+
+
+```
+
+```{r}
+
+# repeat the DAAP6 expression analysis with bRNAseq_ Human Adipocyte Transdifferentiation csv
+# uses DAAP8 
+
+transdiff <- readxl::read_xlsx("bRNAseq_ Human Adipocyte Transdifferentiation.xlsx")
+
+unique_transdiff <- merge(unique_genes, transdiff, by.x = "V11", by.y = "symbol")
+
+#table(unique_transdiff$direction)
+hist(unique_transdiff$log2FoldChange, breaks = 30)
+
+hist(unique_transdiff$padj)
+
+
+table(unique_transdiff$padj <0.05)
+table(unique_transdiff$padj <0.01)
+
+table(unique_transdiff$log2FoldChange < -1 | unique_transdiff$log2FoldChange > 1)
+table(unique_transdiff$log2FoldChange < -1.6 | unique_transdiff$log2FoldChange > 1.6)
+
+
+# DAAP8 expression --------------------------------------------------------
+
+
+### careful, need to unify the genes again
+
+# unique genes already done
+
+# then the DAAP8 expression, which usefully has a fully complete ensgene column
+
+DAAP8_mapped <- mapIds(org.Hs.eg.db, keys = transdiff$ensgene, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+
+DAAP8_mapped_table <- as.data.frame(DAAP8_mapped) 
+
+# same size so can cbind
+DAAP8_genes_unified <- cbind(transdiff, unified_DAAP8_gene_name = DAAP8_mapped_table$DAAP8_mapped) %>% 
+    as.data.table() %>% 
+    na.omit() # repeat for the other ones
+
+###
+
+unique_transdifferentiation <- left_join(unique_genes_unified, DAAP8_genes_unified, by= c( "unified_unique_gene_name" = "unified_DAAP8_gene_name"), relationship = "many-to-many")
+
+temp_expanded <- left_join(expanded_expression, unique_transdifferentiation, by = c("unified_peaky_name" = "V11"))
+
+###
+
+expanded_transdifferentiation <- temp_expanded %>% 
+    mutate(has_transdiff_data = ifelse(unified_unique_gene_name == unified_peaky_name, TRUE, FALSE),
+           pass_standard_threshold_transdiff = ifelse(abs(log2FoldChange) > 1 & padj < 0.05 ,TRUE, FALSE),
+           pass_stringent_threshold_transdiff = ifelse(abs(log2FoldChange) > 1.6 & padj < 0.01,TRUE, FALSE),
+           DAPP8_log2foldchange = log2FoldChange,
+           DAAP8_padj = padj,
+           DAAP8_basemean = baseMean) %>% 
+    dplyr::select(-(starts_with("V")), -symbol, -biotype, -description, -log2FoldChange, -padj, -unified_unique_gene_name, -ensgene) %>% 
+    distinct()
+
+table(expanded_transdifferentiation$pass_standard_threshold_transdiff)
+
+table(expanded_transdifferentiation$pass_stringent_threshold_transdiff)
+
+
+table(expanded_transdifferentiation$pass_standard_threshold_transdiff | expanded_transdifferentiation$pass_standard_threshold_diff)
+
+pass_either <- expanded_transdifferentiation %>% 
+    ungroup(.) %>% 
+    dplyr::filter(pass_standard_threshold_diff == TRUE | pass_standard_threshold_transdiff == TRUE) %>% 
+    distinct(peaky_nominated)
+
+dim(pass_either)
+
+knitr::kable(pass_either) %>% 
+        kable_styling(full_width = FALSE, bootstrap_options = c("striped", "responsive", "bordered"))
+
+
+table(expanded_transdifferentiation$pass_standard_threshold_transdiff & expanded_transdifferentiation$pass_standard_threshold_diff)
+# list which genes are the ones that pass the standard daap6 and daap8 
+pass_both <- expanded_transdifferentiation %>% 
+    ungroup(.) %>% 
+    dplyr::filter(pass_standard_threshold_diff == TRUE & pass_standard_threshold_transdiff == TRUE) %>% 
+    distinct(peaky_nominated)
+
+
+dim(pass_both)
+knitr::kable(pass_both) %>% 
+        kable_styling(full_width = FALSE, bootstrap_options = c("striped", "responsive", "bordered"))
+
+
+# see if you can view the table in the gwalkr
+
+## collapsed table by viewpoint
+
+collapsed <- expanded_transdifferentiation %>% 
+    group_by(fragment_chr, fragment_start, fragment_stop) %>% 
+    summarize(eqtl_overlap_peaky_genes = paste(unique(eQTL_gene[is_nominated_by_eQTL == TRUE] ), collapse = ","),
+              passes_standard_differentiation_threshold = paste(unique(peaky_nominated[pass_standard_threshold_diff == TRUE] ), collapse = ","),
+              passes_strict_differentiation_threshold = paste(unique(peaky_nominated[pass_stringent_threshold_diff == TRUE] ), collapse = ","),
+              passes_standard_insulin_threshold = paste(unique(peaky_nominated[pass_standard_threshold_transdiff == TRUE] ), collapse = ","),
+              passes_strict_insulin_threshold = paste(unique(peaky_nominated[pass_stringent_threshold_transdiff == TRUE] ), collapse = ","))
+
+head(collapsed) # change name, rosiglitasone +/- treatment, energy expenditure
+
+```
+
+```{r closestgene}
+
+# cd ../main_capture_analysis
+# sort -k1,1 -k2,2n peaky_called_unique_genes.bed > peaky_called_unique_genes.sorted.bed
+# sort -k1,1 -k2,2n hg38_all_genes.bed > hg38_all_genes.sorted.bed
+# bedtools closest -a peaky_called_unique_genes.sorted.bed -b ../capoverlaps/hg38_all_genes.sorted.bed -t all > genes_closest_to_baits.bed # in case of ties, report all
+
+# closest_genes <- fread("genes_closest_to_baits.bed")
+# 
+# hmm_2 <- closest_genes %>% 
+#     select(fragment_chr = V1, fragment_start = V2, fragment_stop = V3,
+#            MPCC = V7, peaky_nominated = V11, closest_gene = V19, GO = V22) %>% 
+#     group_by(fragment_chr, fragment_start, fragment_stop) %>% 
+#     mutate(is_closest_gene = ifelse(peaky_nominated == closest_gene, "TRUE", "FALSE")) %>% # is the peaky gene the closest gene by distance?
+#     mutate(closest_gene_nominated = any(is_closest_gene == "TRUE")) # does this fragment have a closest gene nominated at all?  
+# 
+# que_2 <- hmm_2 %>% 
+#     group_by(fragment_chr, fragment_start, fragment_stop) %>% 
+#     select(-peaky_nominated, -is_closest_gene, -MPCC, -GO) %>% 
+#     distinct()
+# 
+# 
+# # overlap with the first que
+# 
+# finale <- full_join(hmm_2, hmm, by = c("V1" = "V5", "V2" = "V6", "V3" = "V7")) %>% 
+#     select(V1, V2, V3, is_closest, not_closest, overlapped, unpredicted, percentages, distance, closest) %>% 
+#     distinct() %>% 
+#     group_by(V1, V2, V3) %>% 
+#     mutate(is_closest_gene = ifelse(is_closest != "NA", is_closest, NA ))
+
+```
+
+
+
+```{bash peakyvschicane}
+
+
+mkdir peak_comparisons
+cd peak_comparisons
+
+### compare all peaks
+
+cat ../plot_sig_mpcc.bedGraph > peaky.bed
+cat ../../../CHiCANE/M1_results_005_bedtools.bed > chicane.bed
+
+bedtools intersect -a chicane.bed -b peaky.bed -wao > all_peaks_intersection.bed
+wc -l all_peaks_intersection.bed
+# may need to run peaky on the remaining viewpoints...
+
+### compare all TSS's
+
+bedtools intersect M1_results_005_bedtools.bed all_tss.bed -wao > M1_genes_tss.bed
+
+bedtools intersect peaky.bed all_tss.bed -wao > peaky_genes_tss.bed
+
+bedtools intersect M1_genes_tss.bed peaky_genes_tss.bed -wao > all_genes_intersection.bed
+
+wc -l all_genes_intersection.bed
+
+```
+
+```{r}
+### check non-overlaps/ disagreements with final column = 0
+
+hm <- fread(all_peaks_intersection.bed)
+
+agreement <- hm %>% 
+    filter(V? > 0)
+
+diasgreement <- hm %>% 
+    filter(V? == 0)
+
+
+```
+

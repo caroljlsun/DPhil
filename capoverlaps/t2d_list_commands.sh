@@ -3,7 +3,7 @@
 ### Setup ###
 ################################
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 # reusing another env with the newish bedtools
 
@@ -14,15 +14,15 @@ mamba activate fullcap
 ### filtered and moved over to my working directory ###
 ################################
 
-cd /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/harmonized_data/harmonized_gwas
+cd genetic_department/projects/TargetLookup/harmonized_data/harmonized_gwas
 zcat T2D.Suzuki.Nature.EUR_hg19_harmonized.tsv.gz | wc -l #19303704
-zcat T2D.Suzuki.Nature.EUR_hg19_harmonized.tsv.gz | awk -F'\t' '$11 < 0.00000005'| gzip >  /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_filtered.gz 
-zcat /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_filtered.gz | wc -l # 64948
+zcat T2D.Suzuki.Nature.EUR_hg19_harmonized.tsv.gz | awk -F'\t' '$11 < 0.00000005'| gzip >  comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_filtered.gz 
+zcat comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_filtered.gz | wc -l # 64948
 ################################
 ### unzipped ###
 ################################
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 gunzip -k T2D_EUR_filtered.gz
 
@@ -34,7 +34,7 @@ cat T2D_EUR_filtered | awk -F'\t' -v OFS='\t' '{print "chr"$4, $5, $5+1, $3, $9,
 ### liftover  ###
 ################################
 
-/nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver T2D_EUR_extra_filtered.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz T2D_EUR_hg38_extra_filtered.bed unmapped_T2D_EUR_hg38_extra_filtered.bed 
+genetic_department/projects/TargetLookup/liftOver T2D_EUR_extra_filtered.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz T2D_EUR_hg38_extra_filtered.bed unmapped_T2D_EUR_hg38_extra_filtered.bed 
 
 # #Deleted in new
 # chr6    51097410        51097411        rs9463672       -0.0236 T       1.118e-09
@@ -76,9 +76,9 @@ awk 'BEGIN{OFS=FS="\t"} NR==FNR{a[NR]=$1;next}{$4=a[FNR]}1' full_lifted_rsid_cle
 ################################
 
 #just moving them over - it probably isn't best practice but the files seem relatively small?
-cp /nfs_home/projects/departments/nnrco/genetic_department/share/GATL_GMGZ/CRE_AdiposeTissue/H3K27ac-ChromatinStates_AdiposeTissue_GMGZ.bed H3K27ac_peaks.bed
+cp genetic_department/share/GATL_GMGZ/CRE_AdiposeTissue/H3K27ac-ChromatinStates_AdiposeTissue_GMGZ.bed H3K27ac_peaks.bed
 
-cp /nfs_home/projects/departments/nnrco/genetic_department/share/GATL_GMGZ/GSE178794_adiposeTissue_consensusPeaks-from11samples_unionPeaksInAtLeast3samples_b38.bed atac.bed
+cp genetic_department/share/GATL_GMGZ/GSE178794_adiposeTissue_consensusPeaks-from11samples_unionPeaksInAtLeast3samples_b38.bed atac.bed
 
 # bedtools intersect twice to keep information from the files, just in case
 bedtools intersect -a T2D_EUR_hg38_extra_filtered_lifted.bed -b H3K27ac_peaks.bed -wa| bedtools intersect -b H3K27ac_peaks.bed -a - -wb > T2D_EUR_hg38_extra_H3K27ac.bed
@@ -110,7 +110,7 @@ wc -l
 ################################
 
 # move a list of hg38 genes over 
-cp /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
+cp genetic_department/projects/TargetLookup/gencode.v26.GRCh38.genes_for_gene.protein_coding.txt hg38_all_genes.bed
 
 # merge the snps within 50+/- kbp of each other
 bedtools merge -d 50000 -i T2D_EUR_hg38_extra_H3K27ac_ATAC.bed > T2D_EUR_hg38_merged.bed
@@ -127,7 +127,7 @@ wc -l 1008
 
 # uni supervisor suggested I find the genes close by the clusters, not the snps
 
-bedtools slop -i T2D_EUR_hg38_merged.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b 500000 > T2D_EUR_hg38_merged_500kbp.bed
+bedtools slop -i T2D_EUR_hg38_merged.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b 500000 > T2D_EUR_hg38_merged_500kbp.bed
 
 # +/- 500kbp, so a million after expr 
 
@@ -165,10 +165,10 @@ wc -l 442 # perfect
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_T2D_EUR_H3K27ac_ATAC" }' T2D_EUR_hg38_clustered.bed | head
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_T2D_EUR_H3K27ac_ATAC" }' T2D_EUR_hg38_clustered.bed > T2D_EUR_hg38_clustered_4col.bed
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo
+cd comp_bio/capture_c_adipocytes/capsequm2/oligo
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_hg38_extra_H3K27ac_ATAC_final /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_4col.bed
-#/fsx/home_dirs/czjs/doctoral_work/repeat-annotation/RepeatMasker/RepeatMasker -species "Homo sapiens" -pa 4 /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_3/oligo_seqs.fa
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_hg38_extra_H3K27ac_ATAC_final comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_4col.bed
+#doctoral_work/repeat-annotation/RepeatMasker/RepeatMasker -species "Homo sapiens" -pa 4 comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_3/oligo_seqs.fa
 
 
 ################################
@@ -177,12 +177,12 @@ sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capseq
 
 ## add to the snp files whether or not an oligo could be designed for it
 
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_final
+cd comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_final
 
 wc -l oligo_info.txt
 1515
 
-wc -l /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_4col.bed
+wc -l comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_4col.bed
 1008
 
 # capsequm designs 2 probes per region, 2*1008 = 2016 , 2016-1515 = 501, 501/2 =~ 251 regions either don't have any probe, or have half the probes etc.
@@ -190,7 +190,7 @@ wc -l /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capover
 
 
 ## Make key
-cd /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps
+cd comp_bio/capture_c_adipocytes/capoverlaps
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1"_"$2"_"$3"_"$4"_cluster_"$17"_T2D_EUR_H3K27ac_ATAC" }' T2D_EUR_hg38_clustered.bed > temp.txt
 paste T2D_EUR_hg38_clustered.bed temp.txt > T2D_EUR_hg38_clustered_keyed.bed
@@ -204,7 +204,7 @@ sort -k18,18 T2D_EUR_hg38_clustered_keyed.bed > T2D_EUR_hg38_clustered_sorted.be
 
 # 13th column is the key
 # awk '{print $13}' oligo_info.txt| head # quick check
-cp /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_final/oligo_info.txt t2d_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_hg38_extra_H3K27ac_ATAC_final/oligo_info.txt t2d_oligo_info.txt
 sort -k13,13 t2d_oligo_info.txt > t2d_oligo_info_sorted.txt
 sed 's/,$//' t2d_oligo_info_sorted.txt > t2d_oligo_info_sorted_no_comma.txt
 sed -i '1d' t2d_oligo_info_sorted_no_comma.txt
@@ -223,7 +223,6 @@ paste T2D_EUR_hg38_clustered_sorted.bed <(awk -F' '  '{print $1}' final_output.t
 paste T2D_EUR_hg38_clustered_sorted.bed <(awk -F' '  '{print $1}' final_output.txt) >  T2D_EUR_hg38_clustered_sorted_final.bed
 
 wc -l T2D_EUR_hg38_clustered_sorted_final.bed # 1008, correct
-
 
 
 ################################
@@ -316,7 +315,7 @@ awk '{gsub(/[^0-9]/, "", $1); split($4,a,":"); print "Chromosome", $1, $2, a[2],
 # remove if within 5 kbp of a gene 
 
 
-bedtools slop -i hg38_all_genes.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b 5000 > hg38_all_genes_extended.bed
+bedtools slop -i hg38_all_genes.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b 5000 > hg38_all_genes_extended.bed
 
 
 bedtools intersect -v -a T2D_EUR_t2d_intersect_snp.bed -b hg38_all_genes_extended.bed | wc -l #39
@@ -349,7 +348,6 @@ awk 'BEGIN{OFS="\t"; FS=OFS} $6 ~ /nonsyn/ {print}' T2D_EUR_t2d_intersect_nexus_
 
 ### repeat for the other files e.g. whr only
 awk '{gsub(/[^0-9]/, "", $1); split($4,a,":"); print "Chromosome", $1, $2, a[2], a[3], "1" }' T2D_EUR_hg38_clustered_sorted_final.bed > T2D_EUR_snp_nexus_check.txt
-
 # unique
 awk 'BEGIN{OFS="\t"; FS=OFS} !seen[$1]++' near_gens_T2D_EUR_snp_nexus_check.txt > T2D_EUR_intersect_nexus_unique.txt
 
@@ -373,6 +371,7 @@ join -1 3 -2 4 T2D_EUR_filtered_sorted.txt T2D_EUR_hg38_clustered_sorted_for_rsi
 
 join -1 3 -2 4 T2D_EUR_filtered_sorted.txt T2D_EUR_hg38_clustered_sorted_for_rsid.txt | awk '{print "Chromosome", $4, $5, $6, $7 ,"1"}' > t2d_snp_nexus_check.txt
 
+awk 'BEGIN{OFS="\t"; OFS} {print "chromosome", $2, $3, $4, $5}' t2d_snp_nexus_check.txt > t2d_snp_nexus_check_may26.txt
 
 # unique
 awk 'BEGIN{OFS="\t"; FS=OFS} !seen[$1]++' near_gens_t2d_snp_nexus_check.txt > t2d_intersect_nexus_unique.txt
@@ -440,11 +439,11 @@ join -j 7 T2D_GTEX_sorted.bed T2D_DAAP6_sorted.bed | awk '$8 == $16' |  sort -u 
 ## All genes, regardless of gene expression:
 # recover the original region sizes to encounter less pain later on:
 
-bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_concatenated_OG.bed
+bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_concatenated_OG.bed
 
 ## GTEX first
 # recover the original region sizes to encounter less pain later on:
-bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed
+bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed
 # change into gene expression column into one that only has the expressed genes, not including the "not expressed"
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {gsub(/,not_expressed/, "", $4); print $1, $2, $3, $4}' T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG.bed > T2D_EUR_hg38_merged_500kbp_genes_sorted_expressed_concatenated_OG_cleaned.bed # wc -l 441
@@ -455,7 +454,7 @@ awk -F'\t' '{print gsub(/,/, "", $4)}' T2D_EUR_hg38_merged_500kbp_genes_sorted_e
 
 ## DAAP6 in house next
 # recover the original region sizes to encounter less pain later on:
-bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated_OG.bed
+bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_expressed_concatenated_OG.bed
 
 # change into gene expression column into one that only has the expressed genes, not including the "not expressed"
 
@@ -560,22 +559,22 @@ wc -l 325
 ### eQTLS ###
 ################################
 
-# files here /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol
+# files here genetic_department/share/for_GATL/collabs/Carol
 # move some over?
 
-# cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/Adipose_Subcutaneous_snps.hg19.bed Adipose_Subcutaneous_snps.hg19.bed 
-# cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/AdipoExpress_snps.hg19.bed AdipoExpress_snps.hg19.bed
-# cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/FUSION_ge_adipose_naive_snps.hg19.bed FUSION_ge_adipose_naive_snps.hg19.bed
-# cp /novo/projects/departments/nnrco/genetic_department/share/for_GATL/collabs/Carol/TwinsUK_ge_fat_snps.hg19.bed TwinsUK_ge_fat_snps.hg19.bed
+# cp genetic_department/share/for_GATL/collabs/Carol/Adipose_Subcutaneous_snps.hg19.bed Adipose_Subcutaneous_snps.hg19.bed 
+# cp genetic_department/share/for_GATL/collabs/Carol/AdipoExpress_snps.hg19.bed AdipoExpress_snps.hg19.bed
+# cp genetic_department/share/for_GATL/collabs/Carol/FUSION_ge_adipose_naive_snps.hg19.bed FUSION_ge_adipose_naive_snps.hg19.bed
+# cp genetic_department/share/for_GATL/collabs/Carol/TwinsUK_ge_fat_snps.hg19.bed TwinsUK_ge_fat_snps.hg19.bed
 
 
 
 # all in hg19 so need to convert to hg38
 
-# /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver AdipoExpress_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz AdipoExpress_snps_lifted.bed  unmapped_AdipoExpress_snps.bed
-# /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver Adipose_Subcutaneous_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz Adipose_Subcutaneous_snps_lifted.bed  unmapped_Adipose_Subcutaneous_snps.bed
-# /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver FUSION_ge_adipose_naive_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz FUSION_ge_adipose_naive_snps_lifted.bed  unmapped_FUSION_ge_adipose_naive_snps.bed
-# /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/liftOver TwinsUK_ge_fat_snps.hg19.bed /nfs_home/projects/departments/nnrco/genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz TwinsUK_ge_fat_snps_lifted.bed  unmapped_TwinsUK_ge_fat_snps.bed
+# genetic_department/projects/TargetLookup/liftOver AdipoExpress_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz AdipoExpress_snps_lifted.bed  unmapped_AdipoExpress_snps.bed
+# genetic_department/projects/TargetLookup/liftOver Adipose_Subcutaneous_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz Adipose_Subcutaneous_snps_lifted.bed  unmapped_Adipose_Subcutaneous_snps.bed
+# genetic_department/projects/TargetLookup/liftOver FUSION_ge_adipose_naive_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz FUSION_ge_adipose_naive_snps_lifted.bed  unmapped_FUSION_ge_adipose_naive_snps.bed
+# genetic_department/projects/TargetLookup/liftOver TwinsUK_ge_fat_snps.hg19.bed genetic_department/projects/TargetLookup/hg19ToHg38.over.chain.gz TwinsUK_ge_fat_snps_lifted.bed  unmapped_TwinsUK_ge_fat_snps.bed
 
 
 # 
@@ -618,7 +617,7 @@ head T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets.bed
 
 awk 'BEGIN{OFS="\t"} {key = $1 OFS $2 OFS $3; if (key in a) a[key] = a[key] "," $8; else a[key] = $8} END {for (key in a) {split(key, arr, OFS); print arr[1], arr[2], arr[3], a[key]}}' T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets.bed > T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed
 
-bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed
+bedtools slop -i T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500000 > T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed
 
 awk 'BEGIN{OFS="\t"; FS=OFS} {gsub(/,not_in_geneset/, "", $4); print $1, $2, $3, $4}' T2D_EUR_hg38_merged_500kbp_genes_sorted_DAAP6_genesets_concatenated_OG.bed > T2D_EUR_hg38_merged_500kbp_genesets_OG_cleaned.bed # wc -l 441
 
@@ -640,9 +639,9 @@ cat T2D_EUR_hg38_tidy_genesets.bed > T2D_EUR_hg38_tidy_genesets.tsv
 ### Finemapping overlap ###
 ################################
 
-# file is here: /novo/projects/departments/nnrco/genetic_department/share/for_LWMR/fm_precomputation_v1/diagram.2024_Suzuki.T2D.EUR/cs_annotated.tsv
+# file is here: genetic_department/share/for_LWMR/fm_precomputation_v1/diagram.2024_Suzuki.T2D.EUR/cs_annotated.tsv
 
-cp /novo/projects/departments/nnrco/genetic_department/share/for_LWMR/fm_precomputation_v1/diagram.2024_Suzuki.T2D.EUR/cs_annotated.tsv T2D_EUR_Suzuki_finemapping.bed
+cp genetic_department/share/for_LWMR/fm_precomputation_v1/diagram.2024_Suzuki.T2D.EUR/cs_annotated.tsv T2D_EUR_Suzuki_finemapping.bed
 # sed -i '1d' T2D_EUR_Suzuki_finemapping.bed # remove 1st row, once. 
 
 # match/ join to this file T2D_EUR_hg38_clustered_sorted_final.bed
@@ -671,8 +670,8 @@ head gene_tss_coordinates.bed
 
 # expand by 1 and 2 kbp
 
-bedtools slop -i gene_tss_coordinates.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -500 > gene_tss_coordinates_1kbp.bed
-bedtools slop -i gene_tss_coordinates.bed -g /fsx/home_dirs/czjs/doctoral_work/2023/guides/sizes.hg.38.fai -b -1000 > gene_tss_coordinates_2kbp.bed
+bedtools slop -i gene_tss_coordinates.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -500 > gene_tss_coordinates_1kbp.bed
+bedtools slop -i gene_tss_coordinates.bed -g doctoral_work/2023/guides/sizes.hg.38.fai -b -1000 > gene_tss_coordinates_2kbp.bed
 
 # intersect -v
 
@@ -686,13 +685,13 @@ cat T2D_EUR_hg38_2kbp_TSS.bed > T2D_EUR_hg38_2kbp_TSS.tsv
 ### dealing with problematic oligos
 ### -------------------------------- ###
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_1/oligo_info.txt t2d_oligos_round1.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_1/oligo_info.txt t2d_oligos_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_1/leftright_coords_round1.bed t2d_oligos_round1_redesign.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_1/leftright_coords_round1.bed t2d_oligos_round1_redesign.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_2/oligo_info.txt t2d_oligos_round2.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_2/oligo_info.txt t2d_oligos_round2.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_2/leftright_coords_round2.bed t2d_oligos_round2_redesign.bed
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/main_attempt_120824/15419_2/leftright_coords_round2.bed t2d_oligos_round2_redesign.bed
 
 # whichever one is 8.30pm onwards\
 \
@@ -702,30 +701,30 @@ mkdir manual_left_right_t2d
 
 cd manual_left_right_t2d
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_selected_oligos.tsv t2d_round1_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_selected_oligos.tsv t2d_round1_oligo_info.txt
 
 autogen_probes_left_right_modded.R
 
 # manually ran through the R script because it's a pain
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_round1.bed
 squeue --user=czjs --iterate=30_seconds
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_round2/oligo_info.txt t2d_round2_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_round2/oligo_info.txt t2d_round2_oligo_info.txt
 
 autogen_probes_left_right_modded.R
 
 processing_snps_T2D.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/t2d_hg38_selected_snps_round2_capready.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/t2d_hg38_selected_snps_round2_capready.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round2/oligo_info.txt t2d_reselected_oligo_info_round2.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round2/oligo_info.txt t2d_reselected_oligo_info_round2.txt
 
 autogen_probes_left_right_modded.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round3 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_reselected_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round3 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_reselected_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round3/oligo_info.txt t2d_reselected_oligo_info_round3.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round3/oligo_info.txt t2d_reselected_oligo_info_round3.txt
 
 autogen_probes_left_right_modded.R
 
@@ -758,7 +757,7 @@ bedtools intersect -a T2D_EUR_hg38_clustered_sorted_final.bed -b exon_coordinate
 awk 'BEGIN{OFS="\t"; FS=OFS} {print $1, $2, $3, $1"_"$2"_"$3"_"$4"_cluster_"$17"_T2D_EUR_H3K27ac_ATAC" }' T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS.bed > T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
 
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_no_exons_no_TSS /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_no_exons_no_TSS comp_bio/capture_c_adipocytes/capoverlaps/T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS_4_col.bed
 # and then you need to filter to get the selected oligos...use processing_snps
 
 
@@ -775,28 +774,28 @@ autogen_probes_left_right_modded.R T2D_EUR_hg38_selected_oligos.bed
 
 # manually ran through the R script because it's a pain
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_round1.bed
 squeue --user=czjs --iterate=30_seconds
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_round2/oligo_info.txt t2d_round2_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_round2/oligo_info.txt t2d_round2_oligo_info.txt
 
 autogen_probes_left_right_modded.R t2d_round2_oligo_info.txt
 
 processing_snps_T2D_EUR.R
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_round3 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/t2d_hg38_selected_snps_round2_capready.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh T2D_EUR_round3 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/t2d_hg38_selected_snps_round2_capready.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_round3/oligo_info.txt t2d_reselected_oligo_info.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/T2D_EUR_round3/oligo_info.txt t2d_reselected_oligo_info.txt
 
 autogen_probes_left_right_modded.R t2d_reselected_oligo_info.txt
 
-sbatch /nfs_home/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round2 /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_reselected_round1.bed
+sbatch comp_bio/capture_c_adipocytes/capsequm2/guides/run_capsequm.sh t2d_reselected_round2 comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/leftright_coords_reselected_round1.bed
 
-cp /novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round2/oligo_info.txt t2d_reselected_oligo_info_round2.txt
+cp comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_reselected_round2/oligo_info.txt t2d_reselected_oligo_info_round2.txt
 
 autogen_probes_left_right_modded.R t2d_reselected_oligo_info_round2.txt
 
-/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/processing_oligos_t2d.R
+comp_bio/capture_c_adipocytes/capoverlaps/processing_oligos_t2d.R
 
 
 
@@ -810,3 +809,39 @@ autogen_probes_left_right_modded.R t2d_reselected_oligo_info_round2.txt
 bedtools intersect -a final_clean_nondup_oligos_whr.bed -b final_clean_nondup_oligos_t2d.bed -wb > whr_t2d_overlap.bed
 
 bedtools intersect -a whr_no_overlap_rows.bed -b t2d_no_overlap_rows.bed -wb # good, nothing
+
+
+
+### -------------------------------- ###
+### making figures on ucsc: tracks depicting snp filtering process
+### -------------------------------- ###
+
+######## can't visualise these tracks because they're not on the same genome build
+# ### before filtering
+
+# awk '{print $1, $2, $3}'
+
+# ### after filtering by genome level significance:
+
+# awk '{print $1, $2, $3}' T2D_EUR_extra_filtered.bed > t2d_64948_snps_ucsc.bed
+
+### after liftover + overlap with epigenetics:
+
+awk '{print $1, $2, $3}' T2D_EUR_hg38_clustered_sorted_final.bed > t2d_1008_snps_ucsc.bed
+
+### after removing exonic snps, snps close to TSSs
+
+awk '{print $1, $2, $3}' T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS.bed > t2d_452_snps_ucsc.bed
+
+### after grouping snps into regions
+
+awk '{print $1, $2, $3}' T2D_EUR_hg38_merged_500kbp_genes_concatenated_OG.bed > t2d_442_regions_ucsc.bed
+
+
+### after designing probes for snps:
+
+awk '{print $1, $2, $3}' t2d_no_overlap_rows.bed > t2d_171_probes_ucsc.bed 
+
+
+
+

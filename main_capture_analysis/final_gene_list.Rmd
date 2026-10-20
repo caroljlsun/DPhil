@@ -1,0 +1,1406 @@
+---
+title: "Final gene list"
+author: "CZJS"
+date: "2025-05-01"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/main_capture_analysis")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+```
+
+Procedure: Prioritise the genes called from peaky and from chicane
+
+Project: Capture C
+
+User: CZJS
+
+Date: May-2025
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(biomaRt)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(knitr)
+library(kableExtra)
+```
+
+```{r TSS}
+
+# plots --------------------------------------------------------------
+
+# Create data frame with the distances and counts
+distances <- c(1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 12000, 15000)
+
+# Read counts from the files
+counts <- c(167, 188, 203, 222, 232, 252, 274, 295, 305, 325, 359, 405)
+
+# Create data frame
+data <- data.frame(distance = distances, count = counts)
+
+# Plot
+library(ggplot2)
+ggplot(data, aes(x = distance, y = count)) +
+    geom_line() +
+    geom_point() +
+    scale_x_log10(breaks = distances, labels = distances) +
+    labs(x = "Buffer Distance (bp)", y = "Number of Overlaps", 
+         title = "Effect of TSS Buffer Distance on Number of Overlaps") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Save the plot
+#ggsave("../peak_comparisons/TSS_distance_plot.png", width = 10, height = 6)
+
+
+```
+
+
+```{r genes}
+### PEAKYS ###
+peaky_M_TSS <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/merged_peaky_M_5000_fulltable_TSS_10kbp.bed")
+
+peaky_P_TSS <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/merged_peaky_P_5000_fulltable_TSS_10kbp.bed")
+
+# keep only the unique gene nominations
+
+unique_peaky_M_TSS <- distinct(peaky_M_TSS, V14, .keep_all = TRUE)
+unique_peaky_P_TSS <- distinct(peaky_P_TSS, V14, .keep_all = TRUE)
+
+# peaky and chicane uses very different scores. Rank them, then normalise to 0-1, then 1- that.
+# following the formula of 1- (x-min)/(max-min)
+
+min_max_rank_normalize <- function(x) {
+    ranked <- rank(x)
+    normalized <- (ranked - min(ranked)) / (max(ranked) - min(ranked))
+    return(normalized)
+}
+
+unique_peaky_M_TSS$normalised_peak_score <- 1-(min_max_rank_normalize(unique_peaky_M_TSS$V4)) # the smaller, the better
+
+unique_peaky_P_TSS$normalised_peak_score <-  1-(min_max_rank_normalize(unique_peaky_P_TSS$V4)) # the smaller, the better
+
+
+### CHICANES ###
+
+chicane_M_TSS <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/merged_chicane_M_5000_fulltable_TSS_10kbp.bed")
+
+chicane_P_TSS <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/merged_chicane_P_5000_fulltable_TSS_10kbp.bed")
+
+# keep only the unique gene nominations
+
+unique_chicane_M_TSS <- distinct(chicane_M_TSS, V14, .keep_all = TRUE)
+unique_chicane_P_TSS <- distinct(chicane_P_TSS, V14, .keep_all = TRUE)
+
+# peaky and chicane uses very different scores. Normalise to 0-1
+# following the formula of (x-min)/(max-min)
+
+unique_chicane_M_TSS$normalised_peak_score <- min_max_rank_normalize(unique_chicane_M_TSS$V4)
+unique_chicane_P_TSS$normalised_peak_score <- min_max_rank_normalize(unique_chicane_P_TSS$V4)
+
+
+# how many are shared between m and p?
+
+table(unique_chicane_M_TSS$V14 %in% unique_chicane_P_TSS$V14)
+table(unique_peaky_M_TSS$V14 %in% unique_peaky_P_TSS$V14)
+
+# which ones are not shared?
+unique_peaky_M_TSS[!which(unique_peaky_M_TSS$V14 %in% unique_peaky_P_TSS$V14)]
+
+### combine the all, have a column indicating origin and maturity
+
+TSS_combination <- bind_rows(list(peaky_M = unique_peaky_M_TSS, peaky_P = unique_peaky_P_TSS, chicane_M = unique_chicane_M_TSS, chicane_P = unique_chicane_P_TSS), .id = "origin") %>% 
+    dplyr::rename(target_chr = V1, target_start = V2, target_stop = V3, mean_peak_score = V4, count = V5, multiviewpoint = V6, bait_chr = V7, bait_start = V8, bait_stop = V9, awk_score = V10, TSS_chr = V11, TSS_start = V12, TSS_stop = V13, gene_nominated = V14) %>% 
+    dplyr::select(-V15)
+
+
+TSS_combination$which_peak_caller <- ifelse(str_detect(TSS_combination$origin, "peaky"), yes = "peaky", no = "chicane")
+TSS_combination$which_cell_state <- ifelse(str_detect(TSS_combination$origin, "_P"), yes = "pre", no = "mature")
+
+TSS_processed <- TSS_combination %>% 
+    group_by(gene_nominated) %>%
+    dplyr::mutate(nominated_by = paste(unique(origin), collapse = "; ")) %>%
+    ungroup() %>% 
+    distinct(gene_nominated, .keep_all = T)
+
+
+final_gene_list <- TSS_combination %>%  distinct(., gene_nominated) # 545 unique genes across m, p, peaky & chicane
+
+#write_csv(final_gene_list, "czjs_final_tci_list.txt")
+### harmonise gene names...
+
+# Map TSS genes to official symbols and ENSG IDs...
+TSS_mapped_symbol <- mapIds(org.Hs.eg.db, keys = TSS_combination$gene_nominated, column = "SYMBOL", keytype = "ALIAS", multiVals = "first")
+TSS_mapped_ENSG <- mapIds(org.Hs.eg.db, keys = TSS_combination$gene_nominated, column = "ENSEMBL", keytype = "ALIAS", multiVals = "first")
+
+
+# Check their NA content...
+
+table(is.na(TSS_mapped_symbol))
+table(is.na(TSS_mapped_ENSG))
+
+TSS_mapped_symbol[which(is.na(TSS_mapped_symbol))]
+
+TSS_mapped_ENSG[which(is.na(TSS_mapped_ENSG))]
+
+#write_tsv(TSS_processed, "raw_count_data_per_gene.tsv")
+
+
+```
+
+
+```{r eQTL}
+
+# the eQTL files are massive so instead of loading them into R, process in the command line
+# wrangle so the first 3 columns are the baits, bc we want to know if the eQTLs at the bait predict the genes overlapped
+eQTL_unique_genes <- TSS_processed %>% 
+    relocate(c(bait_chr, bait_start, bait_stop), .before = origin)
+
+#write_tsv(as.data.frame(eQTL_unique_genes), "../peak_comparisons/all_called_unique_genes.bed", col_names = F)
+
+# bedtools intersect -wo -a ../capoverlaps/Adipose_Subcutaneous_snps_lifted.bed -b all_called_unique_genes.bed > Adipose_Subcutaneous_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a ../capoverlaps/AdipoExpress_snps_lifted.bed -b all_called_unique_genes.bed > AdipoExpress_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a ../capoverlaps/FUSION_ge_adipose_naive_snps_lifted.bed -b all_called_unique_genes.bed > FUSION_intersect_peaky_called_genes.bed
+# 
+# bedtools intersect -wo -a ../capoverlaps/TwinsUK_ge_fat_snps_lifted.bed -b all_called_unique_genes.bed > TwinsUK_intersect_peaky_called_genes.bed
+
+
+TwinsUK <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/TwinsUK_intersect_peaky_called_genes.bed")
+FUSION <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/FUSION_intersect_peaky_called_genes.bed")
+# AdipoExpress <- fread("comp_bio/capture_c_adipocytes/capoverlaps/AdipoExpress_intersect_peaky_called_genes.bed") # has too many unuseable gene IDs, have to ask genetics ppl like GATL when he's back
+Adipose_Subcutaneous <- fread("comp_bio/capture_c_adipocytes/peak_comparisons/Adipose_Subcutaneous_intersect_peaky_called_genes.bed")
+
+# merge/collapse/unique
+
+all_eQTLs <- bind_rows(TwinsUK, FUSION, Adipose_Subcutaneous, .id = "origin") # excluded AdipoExpress for now
+
+has_eQTLs <- all_eQTLs %>% 
+    dplyr::select( eQTL_gene = V4,caller_nominated = V19)
+
+
+#################  MAINTAIN GENE SYMBOLS AND ENSG IDS SEPERATELY, MERGE BY ENSG ID
+
+# Combine all possible keys into one list
+all_keys <- unique(c(has_eQTLs$eQTL_gene, has_eQTLs$caller_nominated))
+
+
+# Map all keys to official gene symbols, using ENSEMBL as fallback
+mapped_genes_ensembl <- mapIds(org.Hs.eg.db, 
+                               keys = all_keys, 
+                               column = "ENSEMBL", 
+                               keytype = "ALIAS", 
+                               multiVals = "first")
+
+# Replace NA with all_keys entries only if they are ENSG IDs
+mapped_genes <- ifelse(
+    !is.na(mapped_genes_ensembl), 
+    mapped_genes_ensembl, 
+    ifelse(grepl("^ENSG", all_keys), all_keys, NA)
+)
+
+# Convert to a data frame for easier merging
+mapped_genes_table <- data.frame(
+    original_name = names(mapped_genes),
+    unified_symbol = mapped_genes,
+    stringsAsFactors = FALSE
+)
+# Most NAs are for Pseudogenes or for Non-coding genes... 
+
+# Merge back with the original data
+eQTLs_genes_unified <- has_eQTLs %>%
+    left_join(mapped_genes_table, by = c("eQTL_gene" = "original_name")) %>%
+    dplyr::rename(unified_eQTL_name = unified_symbol) %>%
+    left_join(mapped_genes_table, by = c("caller_nominated" = "original_name")) %>%
+    dplyr::rename(unified_caller_name = unified_symbol)
+
+# Replace `unified_caller_name` with ENSG ID if no match is found
+eQTLs_genes_unified <- eQTLs_genes_unified %>%
+    mutate(unified_caller_name = ifelse(is.na(unified_caller_name),
+                                        caller_nominated,  # Replace with ENSG ID
+                                        unified_caller_name))
+
+# Most reduced dataset possible
+eQTLs_genes_unified <- eQTLs_genes_unified %>%
+    mutate(is_nominated_by_eqtl = ifelse(unified_eQTL_name == unified_caller_name, TRUE, FALSE)) %>%
+    distinct(unified_caller_name, .keep_all = T) %>% 
+    dplyr::select(-caller_nominated, -eQTL_gene, -unified_eQTL_name) %>% 
+    replace_na(list(is_nominated_by_eqtl = FALSE))
+
+
+
+```
+
+
+```{r expression}
+
+# DAAP6 expression --------------------------------------------------------
+
+DAAP6_expression <- fread("DAAP6_RNAseq_results_APs_v_mADs.csv")
+
+### careful, need to unify the genes again
+
+# Use unique_genes as the primary source of gene names
+all_genes <- unique(c(TSS_processed$gene_nominated, DAAP6_expression$symbol))
+
+# Map genes to official symbols using ENSEMBL
+mapped_genes_ensembl <- mapIds(org.Hs.eg.db, 
+                               keys = all_genes, 
+                               column = "ENSEMBL", 
+                               keytype = "ALIAS", 
+                               multiVals = "first")
+
+
+# Replace NA with all_genes entries only if they are ENSG IDs
+mapped_genes <- ifelse(
+    !is.na(mapped_genes_ensembl), 
+    mapped_genes_ensembl, 
+    ifelse(grepl("^ENSG", all_genes), all_genes, NA)
+)
+
+mapped_genes <- unlist(mapped_genes)
+
+# Convert to a data frame for easier merging
+mapped_genes_table <- data.frame(
+    original_name = names(mapped_genes),
+    unified_ensembl_id = mapped_genes,
+    stringsAsFactors = FALSE
+)
+
+
+# Unify TSS_processed genes
+TSS_genes_unified <- TSS_processed %>%
+    left_join(mapped_genes_table, by = c("gene_nominated" = "original_name")) %>% 
+    dplyr::rename(TSS_ensembl = unified_ensembl_id) 
+
+# Unify DAAP6_expression
+DAAP6_genes_unified <- DAAP6_expression %>%
+    left_join(mapped_genes_table, by = c("symbol" = "original_name")) %>% 
+    dplyr::rename(DAAP6_ensembl = unified_ensembl_id) 
+
+
+
+### Merge datasets
+
+TSS_expression <- left_join(TSS_genes_unified, DAAP6_genes_unified, by = c("TSS_ensembl" = "DAAP6_ensembl"), na_matches = "never", keep = TRUE)
+
+### there are some strange cases of "unified" gene names that aren't correct
+# remove these for now and come back to them
+
+TSS_expression_reduced <- TSS_expression[duplicated(TSS_expression$TSS_ensembl),]
+
+
+
+TSS_expression_duplicates <- TSS_expression[duplicated(TSS_expression$TSS_ensembl) | duplicated(TSS_expression$TSS_ensembl, fromLast = T) ,]
+TSS_expression_uniques <- TSS_expression[!(duplicated(TSS_expression$TSS_ensembl) | duplicated(TSS_expression$TSS_ensembl, fromLast = T)) ,]
+
+#write_csv(TSS_expression_duplicates, "../peak_comparisons/TSS_expression_duplicates.csv")
+
+expression_n_eqtls <- left_join(TSS_expression_uniques, eQTLs_genes_unified, by = c("TSS_ensembl" = "unified_caller_name"))
+
+
+expression_n_eqtls_procd <- expression_n_eqtls %>% 
+    mutate(has_differential_exp_data = ifelse(TSS_ensembl == DAAP6_ensembl, TRUE, FALSE),
+           gene_description = description,
+           DAPP6_log2foldchange = log2FoldChange,
+           DAAP6_padj = padj,
+           DAAP6_direction = direction,
+           DAAP6_unified_gene = symbol,
+           pass_standard_threshold_diff = ifelse(abs(log2FoldChange) > 1 & padj < 0.05 ,TRUE, FALSE),
+           pass_stringent_threshold_diff = ifelse(abs(log2FoldChange) > 1.6 & padj < 0.01,TRUE, FALSE),
+           distance_of_gene_from_TSS = abs((round((expression_n_eqtls$bait_stop-expression_n_eqtls$bait_start)/2)+expression_n_eqtls$bait_start) - expression_n_eqtls$TSS_start),
+           pass_distance_threshold = ifelse(distance_of_gene_from_TSS > 10000, TRUE, FALSE)) %>% 
+    dplyr::select(-(starts_with("V")), -symbol, -biotype, -description, -log2FoldChange, -padj, -direction, -DAAP6_ensembl, -origin, -(starts_with("target")), -(starts_with("bait")), -TSS_chr, -TSS_start, -TSS_stop,-awk_score, -which_peak_caller, -which_cell_state) %>% 
+    distinct() %>% 
+    mutate(DAAP6_padj_005 = DAAP6_padj <0.05,
+           DAAP6_padj_001 = DAAP6_padj <0.01, 
+           DAAP6_log_1 = DAPP6_log2foldchange < -1 | DAPP6_log2foldchange > 1,
+           DAAP6_log_16 = DAPP6_log2foldchange < -1.6 | DAPP6_log2foldchange > 1.6) %>% relocate(TSS_ensembl)
+
+
+```
+
+
+```{r daap8}
+
+# daap8 expression --------------------------------------------------------
+
+
+transdiff <- readxl::read_xlsx("bRNAseq_ Human Adipocyte Transdifferentiation.xlsx") %>% 
+    mutate( symbol = coalesce(symbol, ensgene))
+
+
+### careful, need to unify the genes again
+
+# Use unique_genes as the primary source of gene names
+all_genes <- unique(c(expression_n_eqtls_procd$gene_nominated, transdiff$symbol))
+
+
+# Map genes to official symbols using ENSEMBL 
+mapped_genes_ensembl <- mapIds(org.Hs.eg.db, 
+                               keys = all_genes, 
+                               column = "ENSEMBL", 
+                               keytype = "ALIAS", 
+                               multiVals = "first")
+
+
+# Replace NA with all_genes entries only if they are ENSG IDs
+mapped_genes <- ifelse(
+    !is.na(mapped_genes_ensembl), 
+    mapped_genes_ensembl, 
+    ifelse(grepl("^ENSG", all_genes), all_genes, NA)
+)
+
+mapped_genes <- unlist(mapped_genes)
+
+# Convert to a data frame for easier merging
+mapped_genes_table <- data.frame(
+    original_name = names(mapped_genes),
+    unified_ensembl_id = mapped_genes,
+    stringsAsFactors = FALSE
+)
+
+
+# Unify DAAP8_expression
+DAAP8_genes_unified <- transdiff %>%
+    left_join(mapped_genes_table, by = c("symbol" = "original_name")) %>%
+    dplyr::rename(DAAP8_ensembl = unified_ensembl_id)
+
+
+### Merge datasets
+
+expression_n_eqtls_n_daap8 <- left_join(expression_n_eqtls_procd, DAAP8_genes_unified, by = c("TSS_ensembl" = "DAAP8_ensembl"), na_matches = "never", keep = TRUE)
+
+
+expressions_6n8_eqtls_final <- expression_n_eqtls_n_daap8 %>% 
+    mutate(has_ee_data = ifelse(TSS_ensembl == DAAP8_ensembl, TRUE, FALSE),
+           DAPP8_log2foldchange = log2FoldChange,
+           DAAP8_padj = padj,
+           DAAP8_unified_gene = symbol,
+           pass_standard_threshold_ee = ifelse(abs(log2FoldChange) > 1 & padj < 0.05 ,TRUE, FALSE),
+           pass_stringent_threshold_ee= ifelse(abs(log2FoldChange) > 1.6 & padj < 0.01,TRUE, FALSE)) %>% 
+    dplyr::select( -symbol, -log2FoldChange, -padj, -description, -ensgene, -biotype, -baseMean) %>%
+    distinct() %>% 
+    mutate(DAAP8_padj_005 = DAAP8_padj <0.05,
+           DAAP8_padj_001 = DAAP8_padj <0.01, 
+           DAAP8_log_1 = DAPP8_log2foldchange < -1 | DAPP8_log2foldchange > 1,
+           DAAP8_log_16 = DAPP8_log2foldchange < -1.6 | DAPP8_log2foldchange > 1.6) 
+
+
+```
+
+```{r expressionplots}
+
+
+# Reshape the data into a long format
+df_long <- expressions_6n8_eqtls_final %>%
+    pivot_longer(cols = -c(TSS_ensembl, count, nominated_by, mean_peak_score, gene_description, DAPP6_log2foldchange, DAAP6_padj, DAAP6_direction, DAAP6_unified_gene, DAPP8_log2foldchange, DAAP8_padj, DAAP8_ensembl, DAAP8_unified_gene, gene_nominated, normalised_peak_score, distance_of_gene_from_TSS), names_to = "variable", values_to = "value") %>%
+    count(variable, value)
+
+# Plot bar charts for all columns
+ggplot(df_long, aes(x = value, y = n, fill = value)) +
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = n), vjust = -0.5) +  # Add count labels
+    facet_wrap(~ variable, scales = "fixed") +
+    scale_fill_manual(values = c("red", "blue")) +
+    labs(title = "Counts of TRUE and FALSE for Multiple Columns", x = "Value", y = "Count") +
+    theme_minimal()
+
+```
+
+
+```{r enrichment}
+
+####    NOT ADJUSTED TO USING ENSG IDS YET!!!! ####
+# enrichment --------------------------------------------------------
+
+# are the nominated genes more expressed/more anything than the non-nominated ones? 
+
+
+all_genes_in_1mbp <- fread("../peak_comparisons/gene_tss_in_1mbp.bed")
+
+# unify
+
+# Use unique_genes as the primary source of gene names
+all_genes <- unique(c(expressions_6n8_eqtls_final$TSS_ensembl, all_genes_in_1mbp$V8))
+
+# Map genes to official symbols using ALIAS
+mapped_genes_alias <- mapIds(org.Hs.eg.db, 
+                             keys = all_genes, 
+                             column = "SYMBOL", 
+                             keytype = "ALIAS", 
+                             multiVals = "first")
+
+# Map genes to official symbols using ENSEMBL as fallback
+mapped_genes_ensembl <- mapIds(org.Hs.eg.db, 
+                               keys = all_genes, 
+                               column = "SYMBOL", 
+                               keytype = "ENSEMBL", 
+                               multiVals = "first")
+
+
+# Combine mappings, prioritizing ALIAS over ENSEMBL
+mapped_genes <- ifelse(!is.na(mapped_genes_alias), mapped_genes_alias, mapped_genes_ensembl)
+
+mapped_genes <- unlist(mapped_genes)
+
+
+# Convert to a data frame for easier merging
+mapped_genes_table <- data.frame(
+    original_name = names(mapped_genes),
+    unified_gene_symbol = mapped_genes,
+    stringsAsFactors = FALSE
+)
+# Furthermore, if there is no common symbol for the ENSEMBL id, then replace it with the ENSEMBL ID
+
+mapped_genes_table_final <- mapped_genes_table %>%
+    mutate(final_gene_symbol = coalesce(unified_gene_symbol, original_name))
+
+
+# Unify 1mbp genes
+one_mbp_genes_unified <- all_genes_in_1mbp %>%
+    left_join(mapped_genes_table_final, by = c("V8" = "original_name")) %>%
+    dplyr::rename(unified_one_mbp_gene_name = final_gene_symbol) %>% 
+    dplyr::select(-unified_gene_symbol)
+
+not_nominated <- one_mbp_genes_unified[!one_mbp_genes_unified$unified_one_mbp_gene_name %in% expressions_6n8_eqtls_final$TSS_ensembl]
+
+### Merge datasets
+
+#not_nominated_6_expression <- left_join(not_nominated, DAAP6_genes_unified, by = c("unified_one_mbp_gene_name" = "unified_DAAP6_gene_name"))
+
+
+not_nominated_6_expression_uniques <- not_nominated_6_expression[!(duplicated(not_nominated_6_expression$unified_one_mbp_gene_name) | duplicated(not_nominated_6_expression$unified_one_mbp_gene_name, fromLast = T)) ,]
+
+
+```
+
+
+
+``` {r not_nominated_eqtls}
+
+
+all_eqtls_unique <- unique(all_eQTLs$V4)
+all_peaks_unique <- unique(one_mbp_genes_unified$V8)
+
+# Add a column to indicate whether a gene is peak-nominated
+all_peaks_status <- data.frame(
+    gene = all_peaks_unique,
+    is_peak_nominated = all_peaks_unique %in% expressions_6n8_eqtls_final$TSS_ensembl
+)
+
+# Create a data frame for eQTL genes
+all_eqtls_status <- data.frame(
+    gene = all_eqtls_unique,
+    is_eqtl = TRUE
+)
+
+# Merge eQTL data with peak-nominated status
+merged_status <- merge(all_eqtls_status, all_peaks_status, by = "gene", all = TRUE)
+
+# Replace NA values with FALSE
+merged_status <- merged_status %>%
+    mutate(
+        is_eqtl = ifelse(is.na(is_eqtl), FALSE, is_eqtl),
+        is_peak_nominated = ifelse(is.na(is_peak_nominated), FALSE, is_peak_nominated)
+    )
+
+# Create a contingency table
+contingency_table <- table(merged_status$is_eqtl, merged_status$is_peak_nominated)
+
+# View the contingency table
+print(contingency_table)
+
+# Perform Fisher's exact test
+fisher_result <- fisher.test(contingency_table)
+print(fisher_result)
+
+# Summarize proportions
+proportions <- merged_status %>%
+    group_by(is_peak_nominated) %>%
+    summarize(proportion_eqtl = mean(is_eqtl))
+
+# Plot proportions
+ggplot(proportions, aes(x = is_peak_nominated, y = proportion_eqtl, fill = is_peak_nominated)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("red", "blue")) +
+    labs(title = "Proportion of eQTLs in Peak-Nominated vs Non-Peak-Nominated Genes",
+         x = "Peak-Nominated",
+         y = "Proportion with eQTLs") +
+    theme_minimal()
+```
+
+
+``` {r histograms}
+
+
+# Reshape the data into long format for multiple columns
+df_long_hist <- expressions_6n8_eqtls_final %>%
+    dplyr::select(mean_peak_score, normalised_peak_score, DAPP6_log2foldchange, DAAP6_padj, DAPP8_log2foldchange, DAAP8_padj, count) %>%  # Select the columns you want to plot
+    pivot_longer(cols = everything(), names_to = "variable", values_to = "value")
+
+# Plot multiple histograms
+ggplot(df_long_hist, aes(x = value)) +
+    geom_histogram(bins = 30, alpha = 0.7, fill = "blue") +
+    facet_wrap(~ variable, scales = "free") +
+    labs(title = "Multiple Histograms", x = "Value", y = "Count") +
+    theme_minimal()
+
+```
+
+
+``` {r druggable}
+
+
+drugs <- fread("../peak_comparisons/all_proteins_HS_DRUGGABILITY_V2024.1.1.csv")
+
+genes_with_drugs <- expressions_6n8_eqtls_final %>%
+    left_join(drugs %>% dplyr::select(ensembl_id, gene_symbol, category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab)
+              , by = c("TSS_ensembl" = "ensembl_id"), na_matches = "never", keep = TRUE)
+
+table(genes_with_drugs$category_smallmol)
+
+
+# Reshape the data into a long format
+df_long_drugs <- genes_with_drugs %>%
+    mutate(across(c(category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab), as.character )) %>% 
+    pivot_longer(cols = c(category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab), names_to = "variable", values_to = "value") %>%
+    count(variable, value)
+
+# Plot bar charts for all columns
+ggplot(df_long_drugs, aes(x = value, y = n, fill = value)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~ variable, scales = "free") +
+    geom_text(aes(label = n), vjust = -0.5) +  # Add count labels
+    labs(title = "Counts of TRUE and FALSE for various druggabilities", x = "Value", y = "Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plots <- lapply(split(df_long_drugs, df_long_drugs$variable), function(subdf) {
+    ggplot(subdf, aes(x = value, y = n, fill = value)) +
+        geom_bar(stat = "identity") +
+        geom_text(aes(label = n), vjust = -0.5) +
+        labs(title = unique(subdf$variable), x = "Value", y = "Count") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+})
+
+# To display all plots (in RStudio or Jupyter, for example)
+library(patchwork)
+wrap_plots(plots) # has conflicts with other packages...
+```
+
+
+``` {r gsea}
+library(fgsea)
+library(ggplot2)
+library(reactome.db)
+
+set.seed(42)
+
+ranked_genes_daap6 <- expressions_6n8_eqtls_final %>%
+    filter(has_differential_exp_data == TRUE) %>% 
+    dplyr::select(gene_nominated, DAPP6_log2foldchange) %>% 
+    arrange(desc(DAPP6_log2foldchange)) %>% 
+    deframe()
+
+barplot(ranked_genes_daap6)
+
+hallmark_pathways <- fgsea::gmtPathways("../ref_genomes/h.all.v2024.1.Hs.symbols.gmt")
+kegg_legacy_pathways <- fgsea::gmtPathways("../ref_genomes/c2.cp.kegg_legacy.v2024.1.Hs.symbols.gmt")
+
+# Run fgsea
+fgsea_results <- fgsea(
+    pathways = kegg_legacy_pathways,       # Gene sets
+    stats = ranked_genes_daap6,     # Ranked gene list
+    nperm=10000
+)
+
+plotEnrichment(hallmark_pathways[["HALLMARK_ADIPOGENESIS"]],
+               ranked_genes_daap6) + labs(title="HALLMARK_ADIPOGENESIS")
+
+plotEnrichment(kegg_legacy_pathways[["KEGG_PPAR_SIGNALING_PATHWAY"]],
+               ranked_genes_daap6) + labs(title="KEGG_PPAR_SIGNALING_PATHWAY")
+
+
+head(fgsea_results[order(padj, -abs(NES)), ], n=10)
+
+fgseaResTidy <- fgsea_results %>%
+    as_tibble() %>%
+    arrange(desc(NES))
+
+
+ggplot(fgseaResTidy, aes(reorder(pathway, NES), NES)) +
+    geom_col(aes(fill=padj<0.05)) +
+    coord_flip() +
+    labs(x="Pathway", y="Normalized Enrichment Score",
+         title="Hallmark pathways NES from GSEA") + 
+    theme_minimal()
+
+
+#### WHY ARE THERE NO SIGNIFCANTLY ENRICHED PATHWAYS?
+
+
+```
+
+
+
+``` {r heatmap}
+library(pheatmap)
+
+heatmap_data <- expressions_6n8_eqtls_final %>%
+    dplyr::select(-c(contains("gene"), TSS_ensembl))
+
+#Convert binary columns to numeric (if necessary)
+heatmap_data <- heatmap_data %>%
+    mutate( DAAP6_numeric_direction = case_when(DAAP6_direction == "Up-regulated" ~ 1,
+                                                DAAP6_direction == "Down-regulated" ~ -1,
+                                                DAAP6_direction == "Unchanged" ~ 0),
+            nomination_numeric = case_when(str_detect(nominated_by, "peaky_M") ~ 1,
+                                           str_detect(nominated_by, "peaky_P") ~ 2,
+                                           str_detect(nominated_by, "chicane_M") ~ 3,
+                                           str_detect(nominated_by, "chicane_M") ~ 4)
+    ) %>% dplyr::select(-DAAP6_direction, -nominated_by)
+
+head(heatmap_data)
+
+# Add names to rows
+rownames(heatmap_data) <- expressions_6n8_eqtls_final$TSS_ensembl
+# Convert to a matrix
+heatmap_matrix <- as.matrix(heatmap_data)
+
+# Scale continuous columns (optional, for better visualization)
+heatmap_matrix <- scale(heatmap_matrix)
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+### NA FILTERING?
+
+pheatmap(
+    heatmap_matrix %>% na.omit(),
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+### selection of informative columns
+
+# either all T/F thresholds or all continuous
+
+
+heatmap_data_binary <- heatmap_data %>%
+    dplyr::select(-c(mean_peak_score, DAPP6_log2foldchange, DAAP6_padj, DAPP8_log2foldchange, DAAP8_padj))
+
+heatmap_matrix_binary <- as.matrix(heatmap_data_binary)
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix_binary,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+#NA filter
+
+pheatmap(
+    heatmap_matrix_binary %>% na.omit(),
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+# all continuous 
+
+heatmap_data_continous <- heatmap_data %>%
+    dplyr::select(c(mean_peak_score, DAPP6_log2foldchange, DAAP6_padj, DAPP8_log2foldchange, DAAP8_padj))
+
+heatmap_matrix_continous <- as.matrix(heatmap_data_continous)
+# Scale continuous columns (optional, for better visualization)
+heatmap_matrix_continous <- scale(heatmap_matrix_continous)
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix_continous,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+#NA filter
+
+pheatmap(
+    heatmap_matrix_continous %>% na.omit(),
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Binary and Continuous Data",
+    angle_col = "45"
+)
+
+
+```
+
+
+
+``` {r upset}
+library(UpSetR)
+
+upset_data <- expressions_6n8_eqtls_final %>% 
+    dplyr::select(-c(contains("gene"))) %>% 
+    dplyr::select(-c(mean_peak_score, DAPP6_log2foldchange, DAAP6_padj, DAPP8_log2foldchange, DAAP8_padj, nominated_by, DAAP6_direction, normalised_peak_score, TSS_ensembl, DAAP8_ensembl)) %>% 
+    mutate(across(everything(), as.numeric)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(upset_data, 
+      order.by = "freq",
+      text.scale = 3,
+      nsets = 40)
+
+
+```
+
+
+
+``` {r findalgenelist}
+
+top_15_daap6_up <- expressions_6n8_eqtls_final %>%
+    filter(DAAP6_padj > 0.05) %>% #make sure it significant! 
+    slice_max(DAPP6_log2foldchange, n = 15)
+
+top_15_daap6_down <- expressions_6n8_eqtls_final %>%
+    filter(DAAP6_padj > 0.05) %>% #make sure it significant! 
+    slice_min(DAPP6_log2foldchange, n = 15)
+
+top_15_daap8_up <- expressions_6n8_eqtls_final %>%
+    filter(DAAP8_padj > 0.05) %>% #make sure it significant! 
+    slice_max(DAPP8_log2foldchange, n = 15)
+
+top_15_daap8_down <- expressions_6n8_eqtls_final %>%
+    filter(DAAP8_padj > 0.05) %>% #make sure it significant! 
+    slice_min(DAPP8_log2foldchange, n = 15)
+
+has_eqtl_compiled <- expressions_6n8_eqtls_final %>% 
+    filter(is_nominated_by_eqtl == TRUE)
+
+is_TF <- expressions_6n8_eqtls_final %>% 
+    filter(str_detect(gene_description, "transc") | str_detect(gene_description, "transa")  )
+
+combined_final_list <- rbind(top_15_daap6_up, top_15_daap6_down, top_15_daap8_up, top_15_daap8_down, has_eqtl_compiled, is_TF) %>% 
+    distinct(TSS_ensembl, .keep_all = T)
+
+# Create binary columns for each set
+overlap_data <- expressions_6n8_eqtls_final %>%
+    mutate(
+        in_top_15_daap6_up = TSS_ensembl %in% top_15_daap6_up$TSS_ensembl,
+        in_top_15_daap6_down = TSS_ensembl %in% top_15_daap6_down$TSS_ensembl,
+        in_top_15_daap8_up = TSS_ensembl %in% top_15_daap8_up$TSS_ensembl,
+        in_top_15_daap8_down = TSS_ensembl %in% top_15_daap8_down$TSS_ensembl,
+        in_has_eqtl = TSS_ensembl %in% has_eqtl_compiled$TSS_ensembl,
+        in_is_TF = TSS_ensembl %in% is_TF$TSS_ensembl
+    ) %>%
+    dplyr::select(TSS_ensembl, in_top_15_daap6_up, in_top_15_daap6_down, in_top_15_daap8_up, in_top_15_daap8_down, in_has_eqtl, in_is_TF)
+
+# Convert logical columns to numeric (1/0)
+overlap_data <- overlap_data %>%
+    mutate(across(-TSS_ensembl, as.numeric)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(
+    overlap_data,
+    sets = c("in_top_15_daap6_up", "in_top_15_daap6_down", "in_top_15_daap8_up", "in_top_15_daap8_down", "in_has_eqtl", "in_is_TF"),
+    order.by = "freq", text.scale = 3
+)
+
+# repeat with padj 
+# test with top 50 etc. see if the overlap increases in any particular way
+
+#write_csv(combined_final_list, "../peak_comparisons/combined_final_list_log2fold.csv")
+
+```
+
+```{r finallistpadj}
+
+# by padj
+
+top_15_daap6_up <- expressions_6n8_eqtls_final %>%
+    filter(DAAP6_direction == "Up-regulated") %>% 
+    slice_min(DAAP6_padj, n = 15)
+
+top_15_daap6_down <- expressions_6n8_eqtls_final %>%
+    filter(DAAP6_direction == "Down-regulated") %>% 
+    slice_min(DAAP6_padj, n = 15)
+
+
+top_15_daap8_up <- expressions_6n8_eqtls_final %>%
+    filter(DAAP8_padj > 0.05 & DAPP8_log2foldchange > 0) %>% #make sure it significant and upregulated
+    slice_max(DAAP8_padj, n = 15)
+
+top_15_daap8_down <- expressions_6n8_eqtls_final %>%
+    filter(DAAP8_padj > 0.05 & DAPP8_log2foldchange < 0) %>% #make sure it significant and downregulated
+    slice_min(DAAP8_padj, n = 15)
+
+has_eqtl_compiled <- expressions_6n8_eqtls_final %>% 
+    filter(is_nominated_by_eqtl == TRUE)
+
+is_TF <- expressions_6n8_eqtls_final %>% 
+    filter(str_detect(gene_description, "transc") | str_detect(gene_description, "transa")  )
+
+
+combined_final_list_padj <- rbind(top_15_daap6_up, top_15_daap6_down, top_15_daap8_up, top_15_daap8_down, has_eqtl_compiled, is_TF) %>% 
+    distinct(TSS_ensembl, .keep_all =  TRUE)
+
+# Create binary columns for each set
+overlap_data <- expressions_6n8_eqtls_final %>%
+    mutate(
+        in_top_15_daap6_up = TSS_ensembl %in% top_15_daap6_up$TSS_ensembl,
+        in_top_15_daap6_down = TSS_ensembl %in% top_15_daap6_down$TSS_ensembl,
+        in_top_15_daap8_up = TSS_ensembl %in% top_15_daap8_up$TSS_ensembl,
+        in_top_15_daap8_down = TSS_ensembl %in% top_15_daap8_down$TSS_ensembl,
+        in_has_eqtl = TSS_ensembl %in% has_eqtl_compiled$TSS_ensembl,
+        in_is_TF = TSS_ensembl %in% is_TF$TSS_ensembl
+        
+    ) %>%
+    dplyr::select(TSS_ensembl, in_top_15_daap6_up, in_top_15_daap6_down, in_top_15_daap8_up, in_top_15_daap8_down, in_has_eqtl, in_is_TF)
+
+# Convert logical columns to numeric (1/0)
+overlap_data <- overlap_data %>%
+    mutate(across(-TSS_ensembl, as.numeric)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(
+    overlap_data,
+    sets = c("in_top_15_daap6_up", "in_top_15_daap6_down", "in_top_15_daap8_up", "in_top_15_daap8_down", "in_has_eqtl", "in_is_TF"),
+    order.by = "freq", text.scale = 3
+)
+
+
+#write_csv(combined_final_list_padj, "../peak_comparisons/combined_final_list_padj.csv")
+
+```
+
+
+```{r overlap}
+
+
+# Create binary columns for each set
+overlap_data <- expressions_6n8_eqtls_final %>%
+    mutate(
+        in_padj = TSS_ensembl %in% combined_final_list_padj$TSS_ensembl,
+        in_log2fold = TSS_ensembl %in% combined_final_list$TSS_ensembl
+    ) %>%
+    dplyr::select(TSS_ensembl, in_padj, in_log2fold)
+
+# Convert logical columns to numeric (1/0)
+overlap_data <- overlap_data %>%
+    mutate(across(-TSS_ensembl, as.numeric)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(
+    overlap_data,
+    sets = c("in_padj", "in_log2fold"),
+    order.by = "freq", text.scale = 3
+)
+
+
+```
+
+
+``` {r decoratedheatmap }
+
+# druggability annotations 
+
+heatmap_data <- genes_with_drugs %>%
+    dplyr::select(c(known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`)) %>%
+    mutate_all(as.numeric)%>% 
+    na.omit()
+
+
+heatmap_data <- genes_with_drugs %>%
+    dplyr::select(c(category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`)) %>% 
+    mutate(category_smallmol = as.numeric(as.factor(category_smallmol))) %>% 
+    na.omit()
+
+# Convert to a matrix
+heatmap_matrix <- as.matrix(heatmap_data)
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Heatmap of Druggablity Data",
+    angle_col = "45"
+)
+
+```
+
+
+
+```{r final140}
+
+merged_combined_table <- fread("../peak_comparisons/actual_combined_final_list_log2fold.csv") %>% 
+    bind_rows(fread("../peak_comparisons/actual_combined_final_list_padj.csv"), .id = "origin") %>% 
+    group_by(gene_nominated) %>% 
+    mutate(in_both_logpadj_datasets = ifelse(n()>1, TRUE, FALSE)) %>% 
+    distinct(gene_nominated, .keep_all = T) %>% 
+    mutate(which_dataset = case_when(
+        origin == 1 ~ "log2foldchange",
+        origin == 2 ~ "padj"
+    )) %>% 
+    dplyr::select(-origin) %>% 
+    ungroup()
+
+# comparison_merge_table <- combined_final_list %>% 
+#     bind_rows(combined_final_list_padj, .id = "origin") %>% 
+#     group_by(gene_nominated) %>% 
+#     mutate(in_both_logpadj_datasets = ifelse(n()>1, TRUE, FALSE)) %>% 
+#     distinct(gene_nominated, .keep_all = T) %>% 
+#     mutate(which_dataset = case_when(
+#         origin == 1 ~ "log2foldchange",
+#         origin == 2 ~ "padj"
+#     )) %>% 
+#     dplyr::select(-origin) %>% 
+#     ungroup()
+# 
+
+#table(comparison_merge_table$gene_nominated %in% merged_combined_table$gene_nominated)
+
+extra_peaks_pick_list <- expressions_6n8_eqtls_final %>% 
+    filter(!gene_nominated %in% merged_combined_table$gene_nominated) %>% 
+    filter(pass_distance_threshold == TRUE)
+
+extra_peaks_pick_list$has_differential_exp_data[is.na(extra_peaks_pick_list$has_differential_exp_data)] <- FALSE
+extra_peaks_pick_list$has_ee_data[is.na(extra_peaks_pick_list$has_ee_data)] <- FALSE
+
+### largest peaks by count
+
+which_peaks_are_largest <- extra_peaks_pick_list %>% 
+    slice_max(count, n = 60) %>% 
+    mutate(convincing_peaks = NA) %>% 
+    relocate(convincing_peaks, .before = gene_nominated)
+
+
+#write_csv(which_peaks_are_largest, "../peak_comparisons/which_peaks_are_largest.csv")
+log2fold_annotated <-  fread("../peak_comparisons/actual_combined_final_list_log2fold.csv", na.strings = "")
+
+padj_annotated <-  fread("../peak_comparisons/actual_combined_final_list_padj.csv", na.strings = "")
+
+which_peaks_are_largest_with_annotation <- fread("../peak_comparisons/which_peaks_are_largest_annotated.csv", na.strings = "")
+
+TSS_duplicate_annotated <- fread("../peak_comparisons/TSS_expression_duplicates_annotated.csv", na.strings = "")
+
+# bind rows, then eliminate if pseudogene, if histone marker etc.
+
+# final_final_gene_list <- bind_rows(list(log2fold_annotated, padj_annotated, which_peaks_are_largest_with_annotation, TSS_duplicate_annotated), .id = "origin") %>% 
+#     mutate(gene_nominated = ifelse(is.na(manual_name_correction), gene_nominated, manual_name_correction)) %>% 
+#     mutate(which_dataset = case_when(
+#         origin == 1 ~ "log2foldchange",
+#         origin == 2 ~ "padj",
+#         origin == 3 ~ "largest_peaks",
+#         origin == 4 ~ "TSS_duplicates")) %>% 
+#     distinct(gene_nominated, .keep_all = T) %>%
+#     filter(!is_pseudogene == "yes",
+#            convincing_peaks == "yes" | convincing_peaks == "isoform" | convincing_peaks == "too_close" & is_nominated_by_eqtl == TRUE) %>% 
+#     dplyr::select(-origin)
+
+## argghhh that's not enough genes!!!!!!! 
+
+which_peaks_are_largest_160 <- extra_peaks_pick_list %>% 
+    slice_max(count, n = 160) %>% 
+    mutate(convincing_peaks = NA) %>% 
+    relocate(convincing_peaks, .before = gene_nominated)
+
+which_peaks_are_largest_60_to_160 <- which_peaks_are_largest_160[!which_peaks_are_largest_160$gene_nominated %in% which_peaks_are_largest$gene_nominated,]
+
+#write_csv(which_peaks_are_largest_60_to_160, "../peak_comparisons/which_peaks_are_largest_60_to_160.csv")
+
+which_peaks_are_largest_60_to_160 <- fread("../peak_comparisons/which_peaks_are_largest_60_to_160_annotated.csv", na.strings = "") 
+
+
+final_final_final_gene_list <- bind_rows(list(log2fold_annotated, padj_annotated, which_peaks_are_largest_with_annotation, TSS_duplicate_annotated, which_peaks_are_largest_60_to_160), .id = "origin") %>% 
+    mutate(gene_nominated = ifelse(is.na(manual_name_correction), gene_nominated, manual_name_correction)) %>% 
+    mutate(which_dataset = case_when(
+        origin == 1 ~ "log2foldchange",
+        origin == 2 ~ "padj",
+        origin == 3 ~ "largest_peaks_60",
+        origin == 4 ~ "TSS_duplicates",
+        origin == 5 ~ "largest_peaks_160")) %>% 
+    distinct(gene_nominated, .keep_all = T) %>%
+    filter(is.na(is_pseudogene), 
+           convincing_peaks == "yes" | convincing_peaks == "isoform" | convincing_peaks == "too_close" & is_nominated_by_eqtl == TRUE,
+           !gene_nominated %in% c("H1-5", "H2AC11", "H2AC4", "H3C11", "H3C2", "H4C13", "H4C3", "H4C8")) %>% 
+    dplyr::select(-origin) 
+
+
+final_140_list <- final_final_final_gene_list %>% 
+    filter(which_dataset != "largest_peaks_160") %>% 
+    bind_rows( slice_max(final_final_final_gene_list[final_final_final_gene_list$which_dataset == "largest_peaks_160",], count, n = 23))
+
+
+#write_tsv(final_140_list, "../peak_comparisons/final_140_genes.tsv")
+
+# then randomise with sample()
+set.seed(42)
+final_70_list <- final_140_list[sample(1:140, size = 70)]
+set.seed(42)
+hist(sample(1:140, size = 70))
+
+#write_tsv(final_70_list, "../peak_comparisons/final_70_genes.tsv")
+
+
+# then annotate with druggability data!
+
+final_70_list_drugs <- left_join(final_70_list, drugs %>% dplyr::select(ensembl_id, gene_symbol, category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab),
+                                 by = c("TSS_ensembl" = "ensembl_id"), na_matches = "never", keep = TRUE)
+
+
+table(final_70_list_drugs$category_smallmol)
+
+
+# Reshape the data into a long format
+df_long_drugs <- final_70_list_drugs %>%
+    mutate(across(c(category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab), as.character )) %>% 
+    pivot_longer(cols = c(category_smallmol, known_smallmol_binder, ubiquitination_evidence, `secreted/extracellular_high_conf`, category_protac, category_ab), names_to = "variable", values_to = "value") %>%
+    count(variable, value)
+
+# Plot bar charts for all columns
+ggplot(df_long_drugs, aes(x = value, y = n, fill = value)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~ variable, scales = "free") +
+    geom_text(aes(label = n), vjust = -0.5) +  # Add count labels
+    labs(title = "Counts of TRUE and FALSE for various druggabilities", x = "Value", y = "Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plots <- lapply(split(df_long_drugs, df_long_drugs$variable), function(subdf) {
+    ggplot(subdf, aes(x = value, y = n, fill = value)) +
+        geom_bar(stat = "identity") +
+        geom_text(aes(label = n), vjust = -0.5) +
+        labs(title = unique(subdf$variable), x = "Value", y = "Count") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+})
+
+wrap_plots(plots) # has conflicts with other packages...
+
+#heatmap of gene expression?
+
+
+heatmap_data <- final_70_list_drugs %>% #final_70_list_drugs #genes_with_drugs
+    dplyr::select(c( has_differential_exp_data, has_ee_data, is_nominated_by_eqtl, multiviewpoint, known_smallmol_binder, ubiquitination_evidence)) %>% 
+    mutate_all(as.numeric)
+
+# replace all NAs with binary FALSE = 0
+heatmap_data[is.na(heatmap_data)] <- 0
+
+# Convert to a matrix
+heatmap_matrix <- as.matrix(heatmap_data)
+
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = FALSE,  # Cluster columns
+    main = "Annotations for final 70 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    color = c("lightblue", "coral"), border_color = "slategray2"
+)
+
+
+# for the 140, plot upset
+
+upset_data <- final_140_list %>% 
+    mutate(top_10_percentage_of_largest_peaks = as.numeric(rank(-count, ties.method = "first") <= ceiling(6))) %>%
+    dplyr::select(is_nominated_by_eqtl, has_differential_exp_data, has_ee_data, top_10_percentage_of_largest_peaks) %>%
+    dplyr::rename(`is adipose eQTL` = is_nominated_by_eqtl,
+                  `is expressed in DAAP6 cell line` = has_differential_exp_data,
+                  `is expressed in alternate DAAP8 cell line` = has_ee_data,
+                  `is top 10% of largest peaks` = top_10_percentage_of_largest_peaks) %>% 
+    mutate(across(everything(), as.numeric)) %>% 
+    replace_na(list(0,0,0,0)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(upset_data, 
+      nsets = 10,
+      order.by = "freq",
+      text.scale = 3,
+      point.size = 3,
+      set_size.show = FALSE)
+
+
+```
+
+
+``` {r heatmapmadness}
+
+final_70_list <- fread( "../peak_comparisons/final_70_genes.tsv")
+final_140_list <- fread( "../peak_comparisons/final_140_genes.tsv")
+
+
+master_key <- fread("master_fragment_key.bed") %>% tibble()
+
+table(final_140_list$gene_nominated %in% expression_n_eqtls$gene_nominated)
+table(final_140_list$gene_nominated %in% TSS_combination$gene_nominated)
+
+final_140_list$gene_nominated[!is.na(final_140_list$manual_name_correction)]
+
+minimal_master_key <- master_key %>% dplyr::select(c(V1, V2, V3, V7)) %>% 
+    mutate(gwas = word(V7, 7, sep = "_"), 
+           rsid = word(V7, 4, sep = "_")) %>% 
+    dplyr::select(-V7)
+
+qux <- left_join(TSS_combination, minimal_master_key, join_by("bait_chr"=="V1", "bait_start"=="V2", "bait_stop"=="V3"))
+
+# genes with a direct match
+
+final_140_list$gene_nominated %in% TSS_combination$gene_nominated
+
+table(TSS_combination$gene_nominated %in% final_140_list$gene_nominated)
+
+genes_with_bait_annotation <- final_140_list[final_140_list$gene_nominated %in% TSS_combination$gene_nominated
+]
+
+tss_with_annotation <- TSS_combination[TSS_combination$gene_nominated %in% final_140_list$gene_nominated] # 231
+
+hmm <- unique(tss_with_annotation, by =c("gene_nominated", "bait_start"))
+
+foo <- left_join(genes_with_bait_annotation, qux, by = "gene_nominated") %>%  #also 231
+    distinct(gene_nominated, gwas, .keep_all = T)
+
+# genes without a direct match
+
+!final_140_list$gene_nominated %in% TSS_combination$gene_nominated
+
+genes_without_bait_annotation <- final_140_list[!final_140_list$gene_nominated %in% TSS_combination$gene_nominated]
+
+
+bleh <-  left_join(genes_without_bait_annotation, qux, join_by("DAAP6_unified_gene"=="gene_nominated")) %>% #2 rows
+    distinct(gene_nominated, gwas, .keep_all = T) # 1 row
+
+
+tadah <- bind_rows(foo, bleh) %>% 
+    mutate(nominated_by_T2D = ifelse(str_detect(gwas, "T2D"), yes = "1", no = "0" ),
+           nominated_by_whr = ifelse(str_detect(gwas, "whr"), yes = "1", no = "0" ),
+           viewpoint_overlaps_H3K27ac_ATAC = "1",
+           nominated_by_capture_c = "1") %>% 
+    dplyr::select(nominated_by_T2D, nominated_by_whr, viewpoint_overlaps_H3K27ac_ATAC, is_nominated_by_eqtl, multiviewpoint = multiviewpoint.x, nominated_by_capture_c, has_ee_data, has_differential_exp_data, gene_nominated)
+
+
+
+heatmap_data <- tadah %>% #final_70_list_drugs #genes_with_drugs
+    dplyr::select(-gene_nominated) %>% 
+    mutate_all(as.numeric)
+
+# replace all NAs with binary FALSE = 0
+heatmap_data[is.na(heatmap_data)] <- 0
+
+# Convert to a matrix
+heatmap_matrix <- as.matrix(heatmap_data)
+
+rownames(heatmap_matrix) <- tadah$gene_nominated
+
+library(viridis)
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = FALSE,  # Cluster columns
+    main = "Annotations for final 140 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    color = mako(n = 2,  begin = 1, end = 0.7),
+    border_color = FALSE,
+    gaps_col = c(4,4,4, 6,6,6),
+    show_rownames = T,
+    labels_col = c("Region nominated by T2D GWAS", "Region nominated by WHR GWAS", "Region overlaps ATAC+H3K27ac", "Gene nominated by eQTL", "Gene nominated by multiple capture viewpoints", "Gene nominated by Capture C", "Has energy expenditure expression data", "Has differentiation expression data")
+    
+)
+
+pheatmap(
+    t(heatmap_matrix),
+    cluster_rows = FALSE,  # Cluster rows
+    cluster_cols = TRUE,  # Cluster columns
+    main = "Annotations for final 140 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    color = mako(n = 2,  begin = 1, end = 0.7),
+    border_color = FALSE,
+    gaps_row = c(4,4,4, 6,6,6),
+    show_rownames = T, fontsize_row = 5, fontsize_col = 5
+)
+
+```
+
+
+```{r overlapthesisplots}
+
+tadah_2 <- bind_rows(foo, bleh)
+
+is_TF_2 <- tadah_2 %>% 
+    filter(str_detect(gene_description, "transc") | str_detect(gene_description, "transa")  )
+
+tadah_2 <- tadah_2%>% 
+    mutate(
+        # nominated_by_T2D = ifelse(str_detect(gwas, "T2D"), yes = "1", no = "0" ),
+        # nominated_by_whr = ifelse(str_detect(gwas, "whr"), yes = "1", no = "0" ),
+        # viewpoint_overlaps_H3K27ac_ATAC = "1",
+        # nominated_by_capture_c = "1",
+        is_tf = TSS_ensembl %in% is_TF_2$TSS_ensembl) %>% 
+    dplyr::select(TSS_ensembl, "Transcription factor" = is_tf, "eQTL" = is_nominated_by_eqtl, "Energy expenditure data" = has_ee_data, "Adipocyte differentiation data" =  has_differential_exp_data) #nominated_by_T2D, nominated_by_whr, viewpoint_overlaps_H3K27ac_ATAC, multiviewpoint = multiviewpoint.x, nominated_by_capture_c, 
+
+
+# Convert logical columns to numeric (1/0)
+overlap_data <- tadah_2 %>%
+    mutate(across(-TSS_ensembl, as.numeric)) %>% 
+    as.data.frame()
+
+# Create an UpSet plot
+upset(
+    overlap_data,
+    sets = c( "Transcription factor", "eQTL", "Energy expenditure data", "Adipocyte differentiation data"),
+    order.by = "freq", text.scale = 2
+
+)
+
+
+```
+
+
+```{r prettyheatmap70list}
+
+heatmap_70 <- tadah[tadah$gene_nominated %in% final_70_list$gene_nominated]
+
+
+heatmap_data <- heatmap_70 %>% #final_70_list_drugs #genes_with_drugs
+    dplyr::select(-gene_nominated) %>% 
+    mutate_all(as.numeric)
+
+# replace all NAs with binary FALSE = 0
+heatmap_data[is.na(heatmap_data)] <- 0
+
+# Convert to a matrix
+heatmap_matrix <- as.matrix(heatmap_data)
+
+rownames(heatmap_matrix) <- heatmap_70$gene_nominated
+
+# Plot the heatmap
+pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = FALSE,  # Cluster columns
+    main = "Annotations for final 70 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    color = mako(n = 2,  begin = 1, end = 0.7),
+    border_color = "grey",
+    gaps_col = c(4,4,4, 6,6,6),
+    show_rownames = T, fontsize_row = 9, fontsize_col = 7, cellwidth = 100,
+    labels_col = c("Region nominated by T2D GWAS", "Region nominated by WHR GWAS", "Region overlaps ATAC+H3K27ac", "Gene nominated by eQTL", "Gene nominated by multiple capture viewpoints", "Gene nominated by Capture C", "Has energy expenditure expression data", "Has differentiation expression data")
+    
+)
+
+
+# Heatmap with fold changes
+
+
+tadah_2 <- bind_rows(foo, bleh) %>% 
+    mutate(nominated_by_T2D = ifelse(str_detect(gwas, "T2D"), yes = "1", no = "0" ),
+           nominated_by_whr = ifelse(str_detect(gwas, "whr"), yes = "1", no = "0" ),
+           viewpoint_overlaps_H3K27ac_ATAC = "1",
+           nominated_by_capture_c = "1") %>% 
+    dplyr::select(nominated_by_T2D, nominated_by_whr, viewpoint_overlaps_H3K27ac_ATAC, is_nominated_by_eqtl, multiviewpoint = multiviewpoint.x, nominated_by_capture_c, DAPP6_log2foldchange, DAPP8_log2foldchange, gene_nominated)
+
+
+heatmap_70_2 <- tadah_2[tadah_2$gene_nominated %in% final_70_list$gene_nominated]
+
+
+heatmap_data_2 <- heatmap_70_2 %>% #final_70_list_drugs #genes_with_drugs
+    dplyr::select(-gene_nominated) %>% 
+    mutate_all(as.numeric)
+
+# replace all NAs with binary FALSE = 0
+heatmap_data_2[is.na(heatmap_data_2)] <- 0
+
+# Convert to a matrix
+heatmap_matrix_2 <- as.matrix(heatmap_data_2)
+
+rownames(heatmap_matrix_2) <- heatmap_70_2$gene_nominated
+
+pheatmap(
+    heatmap_matrix_2,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = FALSE,  # Cluster columns
+    main = "Annotations for final 70 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    border_color = "grey",
+    #breaks = c(0,1),
+    #color = mako(n = 2,  begin = 1, end = 0.7),
+    gaps_col = c(4,4,4, 6,6,6),
+    show_rownames = T, fontsize_row = 9, fontsize_col = 10, cellwidth = 100,
+    labels_col = c("Region nominated by T2D GWAS", "Region nominated by WHR GWAS", "Region overlaps ATAC+H3K27ac", "Gene nominated by eQTL", "Gene nominated by multiple capture viewpoints", "Gene nominated by Capture C", "Energy expenditure log2foldchange", "Differentiation log2foldchange")
+    
+)
+
+# saved as final_70_heatmap_expression_changes 1500x1100
+
+pheatmap(
+    heatmap_matrix_2,
+    cluster_rows = TRUE,  # Cluster rows
+    cluster_cols = FALSE,  # Cluster columns
+    main = "Annotations for final 70 genes",
+    angle_col = "45",
+    legend_labels = c("FALSE", "TRUE"), legend = T, legend_breaks = c(0,1), 
+    border_color = "grey",
+    breaks = c(0,0.9),
+    color = mako(n = 2,  begin = 1, end = 0.7),
+    gaps_col = c(4,4,4, 6,6,6),
+    show_rownames = T, fontsize_row = 9, fontsize_col = 10, cellwidth = 100,
+    labels_col = c("Region nominated by T2D GWAS", "Region nominated by WHR GWAS", "Region overlaps ATAC+H3K27ac", "Gene nominated by eQTL", "Gene nominated by multiple capture viewpoints", "Gene nominated by Capture C", "Energy expenditure log2foldchange", "Differentiation log2foldchange")
+    
+)
+
+# saved as final_70_heatmap_binary 1500x1100
+
+```

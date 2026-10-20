@@ -8,7 +8,7 @@
 library(tidyverse)
 library(data.table)
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr//")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr//")
 
 whr_oligos_r1 <- fread("whradjbmi_combined_hg38_selected_oligos.bed") %>% 
     mutate(associations = str_remove(associations, ",")) %>% 

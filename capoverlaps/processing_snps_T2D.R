@@ -1,7 +1,7 @@
 library(tidyverse)
 library(data.table)
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps")
 
 t2d_finemapping <- fread("T2D_EUR_Suzuki_finemapping.bed") 
 t2d_snps <- fread("T2D_EUR_hg38_clustered_sorted_final_no_exons_no_TSS.bed")
@@ -137,7 +137,7 @@ unified <- unified %>% select(-id, id)
 
 ### which oligos are these snps going to use?
 
-all_oligos <- fread("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_no_exons_no_TSS/oligo_info.txt")
+all_oligos <- fread("comp_bio/capture_c_adipocytes/capsequm2/oligo/t2d_no_exons_no_TSS/oligo_info.txt")
 # remove that awkward comma...
 
 all_oligos_processed <- all_oligos %>% 
@@ -153,7 +153,7 @@ which_oligos <- all_oligos_processed[all_oligos_processed$unique_name %in% unifi
 
 # first the key of their failure:
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/")
 t2d_pick_new_snps <- fread("leftright_coords_round2.bed")
 
 # clean key?

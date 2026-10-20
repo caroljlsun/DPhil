@@ -8,7 +8,7 @@
 library(tidyverse)
 library(data.table)
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/")
 
 t2d_oligos_r1 <- fread("T2D_EUR_hg38_selected_oligos.bed") %>% 
     mutate(associations = str_remove(associations, ",")) %>% 
@@ -323,20 +323,20 @@ length(unique(t2d_oligos_r1$associations)) # 386
 
 #write_tsv(final_clean_nondup_oligos, "final_clean_nondup_oligos_t2d.txt")
 
-t2d_final_set <- fread("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/final_clean_nondup_oligos_t2d.txt")
+t2d_final_set <- fread("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_t2d/final_clean_nondup_oligos_t2d.txt")
 
-whr_final_set <- fread("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/final_clean_nondup_oligos_whr.txt")
+whr_final_set <- fread("comp_bio/capture_c_adipocytes/capoverlaps/manual_left_right_whr/final_clean_nondup_oligos_whr.txt")
 
 merged_oligos <- rbindlist(list("t2d_final_set" = t2d_final_set , "whr_final_set" = whr_final_set), id = "gwas") %>% 
     select(-gwas, gwas)
 
-#write_tsv(merged_oligos, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos.txt")
+#write_tsv(merged_oligos, "comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos.txt")
 
 #bedtools intersect -a final_clean_nondup_oligos_whr.bed -b final_clean_nondup_oligos_t2d.bed -wb > whr_t2d_overlap.bed
 
 # read in the overlap file and remove from overall big file
 
-setwd("/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps")
+setwd("comp_bio/capture_c_adipocytes/capoverlaps")
 
 
 whr_t2d_overlap <- fread("whr_t2d_overlap.bed") %>% 
@@ -389,8 +389,8 @@ whr_no_overlap_rows <- whr_final_set[!whr_final_set$cluster %in% whr_overlap_clu
 
 no_overlap_merge <- rbind(whr_no_overlap_rows, t2d_no_overlap_rows, whr_t2d_overlap_rows)
 
-#write_tsv(no_overlap_merge, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos_non_overlapping.txt")
-#write_tsv(no_overlap_merge, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos_non_overlapping.bed")
+#write_tsv(no_overlap_merge, "comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos_non_overlapping.txt")
+#write_tsv(no_overlap_merge, "comp_bio/capture_c_adipocytes/capoverlaps/final_merged_oligos_non_overlapping.bed")
 
 # final check in bedtools 
 
@@ -398,7 +398,63 @@ t2d_final_combo <- rbind(t2d_no_overlap_rows, whr_t2d_overlap_rows[whr_t2d_overl
 
 whr_final_combo <- rbind(whr_no_overlap_rows, whr_t2d_overlap_rows[whr_t2d_overlap_rows$ID ==  "whr_combined_perfect",])
 
-# write_tsv(t2d_final_combo, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/t2d_no_overlap_rows.txt" ,col_names = T)
-# write_tsv(t2d_final_combo, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/t2d_no_overlap_rows.bed" ,col_names = F)
-# write_tsv(whr_final_combo, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whr_no_overlap_rows.txt" ,col_names = T)
-# write_tsv(whr_final_combo, "/novo/projects/departments/nnrco/comp_bio/capture_c_adipocytes/capoverlaps/whr_no_overlap_rows.bed" ,col_names = F)
+# write_tsv(t2d_final_combo, "comp_bio/capture_c_adipocytes/capoverlaps/t2d_no_overlap_rows.txt" ,col_names = T)
+# write_tsv(t2d_final_combo, "comp_bio/capture_c_adipocytes/capoverlaps/t2d_no_overlap_rows.bed" ,col_names = F)
+# write_tsv(whr_final_combo, "comp_bio/capture_c_adipocytes/capoverlaps/whr_no_overlap_rows.txt" ,col_names = T)
+# write_tsv(whr_final_combo, "comp_bio/capture_c_adipocytes/capoverlaps/whr_no_overlap_rows.bed" ,col_names = F)
+
+
+
+### Sanity checks during thesis writing 25/06/26
+# so no_overlap_merge is the main one that I finally submitted for the oligo ordering
+
+
+oligo_checks <- no_overlap_merge %>%
+    dplyr::mutate(unique_origin_and_cluster = paste0(ID,"_" ,cluster))
+
+length(unique(oligo_checks$unique_origin_and_cluster))
+
+# getting the stats of singles, doubles regions for whr
+
+which_doubles_whr <- whr_no_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() >= 2) # 247/2 = 137 regions
+
+
+which_singles_whr <- whr_no_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() < 2) # 43 regions
+
+# so 137+43 = 180, which is correct! 
+
+# getting the stats of singles, doubles regions for t2d
+
+which_doubles_t2d <- t2d_no_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() >= 2) # 264/2=132 regions
+
+
+which_singles_t2d <- t2d_no_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() < 2) # 39 regions
+
+# so 137+43 = 180, which is correct! 
+
+# getting the stats of singles, doubles regions for the shared regions
+
+
+
+which_doubles_shared <- whr_t2d_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() == 2) # 60/2 =30 regions
+
+
+which_singles_shared <- whr_t2d_overlap_rows %>%
+    mutate(cluster_number = str_extract(cluster, "\\d+")) %>% 
+    group_by(cluster) %>% 
+    filter(n() < 2) # 2 but its jsut been given different names between the datasets, so just 1 actually
