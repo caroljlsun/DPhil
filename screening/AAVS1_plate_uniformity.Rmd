@@ -1,0 +1,502 @@
+---
+title: "AAVS1_plate_uniformity"
+author: "CZJS"
+date: "2025-09-23"
+output: html_document
+---
+
+```{r, echo=FALSE}
+path_use <- "comp_bio/capture_c_adipocytes/screening"
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = paste0(path_use, "/cache/"),
+                      fig.path = paste0(path_use, "/cache/"))
+
+easypackages::libraries("tidyverse",
+                        "data.table",
+                        "corrplot",
+                        "ggpubr",
+                        "ggrepel",
+                        "Hmisc",
+                        "viridis",
+                        "ggsci",
+                        "useful", 
+                        "magrittr")
+
+
+source("/novo/users/czjs/doctoral_work/ggplate_functions/plate_plot.R")
+source("/novo/users/czjs/doctoral_work/ggplate_functions/data.R")
+
+load("/novo/users/czjs/doctoral_work/ggplate_functions/data_continuous_96.rda")
+load("/novo/users/czjs/doctoral_work/ggplate_functions/viridis_colours.rda")
+
+
+```
+
+#### **Read & Process data** {.tabset}
+
+**Requires data in tidy format:** *nX Screen, nX 96w per screen, nX controls, nX Unique genes per screen*
+
+```{r, echo=TRUE, warning=FALSE}
+
+
+# loop for plates
+
+what_to_plot <- c("cells", "z_score_cells", "log_2_cells")[1]
+
+temp <- c()
+temp_2 <- c()
+plates_cleaned <- c()
+temp_plot <- c()
+list_of_plates <- "AAVS1_nuclei_count.txt"
+
+for (i in 1:length(list_of_plates)) {
+  #print(list_of_plates[i])
+  
+  row_alphabet <- c("A", "B", "C", "D", "E", "F", "G", "H")
+  
+  temp <- fread(list_of_plates[i], skip = 8)
+  print(temp)
+  
+  temp_2 <- temp %>%
+    dplyr::select(c("Row", "Column", "Nuclei - Number of Objects")) %>%
+    dplyr::rename(cells = `Nuclei - Number of Objects`)
+  
+  temp_2 <- temp_2[!temp_2$Column %in% c(1,12)]
+
+  print(temp_2)
+  
+  for (j in 1:8) {
+    temp_2$Row[temp_2$Row == j] <- row_alphabet[j]
+  }
+  
+  plates_cleaned[[i]] <- temp_2 %>%
+    dplyr::mutate( cells = cells,
+                   well = paste0(Row, Column),
+                   .keep = "none") %>%
+    dplyr::mutate(z_score_cells = (cells - mean(cells)/sd(cells)),
+                  log_2_cells = log2(cells)
+    )
+  
+  temp_plot <- plate_plot(
+    data = plates_cleaned[[i]],
+    position = well,
+    value = log_2_cells, # or z_score_cells, or log_2_cells
+    plate_size = 96,
+    plate_type = "round",
+    colour = viridis_colours
+  )
+  
+  
+  show(temp_plot)
+  
+  
+  
+}
+
+
+
+```
+
+
+**Data processing for visualisation & analysis:**
+
+-   Generating (Partial) pID = Row, Column; (Unique) ID = Plate, Row, Column, Position
+
+```{r, echo=TRUE, warning=FALSE}
+plate_names <- c("plate_1", "plate_2", "plate_3")
+names(plates_cleaned) <- plate_names
+
+combined_df <- bind_rows(lapply(names(plates_cleaned), function(name) {
+  df <- plates_cleaned[[name]]
+  df$Plate <- name
+  df
+}))
+
+data_all <- combined_df %>% 
+    dplyr::select(-z_score_cells, -log_2_cells) %>% 
+    dplyr::rename(pID = well,
+                  Nuclei = cells) %>% 
+    dplyr::mutate(Row = str_extract(pID, "[A-Za-z]+")) %>% 
+    dplyr::mutate(Column = str_extract(pID, "[0-9]+")) %>% 
+    dplyr::mutate(Column = as.numeric(Column)) %>% 
+    dplyr::mutate(Position = ifelse(Row %in% c("A", "H") | Column %in% c(1, 12), "edge", "non-edge"))
+
+#Generating Unique IDs
+data_all %<>% 
+  dplyr::mutate(ID=paste(Plate, Row, Column, Position, sep = "_"))
+
+```
+
+
+
+
+-   Generating Log2 values (for each plate based on nuclei number and AdipoRED Area per Cell)
+
+```{r, echo=TRUE, warning=FALSE}
+ 
+#Generating Log2 values
+data_all %<>% 
+  dplyr::mutate(Log2_Nuclei=log2(data_all$Nuclei))
+```
+
+-   Generating Z Score (for each plate based on nuclei number and AdipoRED Area per Cell)
+
+```{r, echo=TRUE, warning=FALSE}
+
+#Creating Z score by plate
+data_all %<>% 
+  dplyr::group_by(Plate) %>%
+  dplyr::mutate(Nuclei_z_score = Nuclei - mean(Nuclei)/sd(Nuclei))
+
+```
+
+-   Average nuclei count
+
+```{r}
+
+
+average_plate <- data_all %>% 
+    group_by(pID) %>% 
+    dplyr::transmute(average_nuclei_log2 = mean(Log2_Nuclei)) %>% 
+    unique()
+
+
+plate_plot(
+  data = average_plate,
+  position = pID,
+  value = average_nuclei_log2,
+  plate_size = 96,
+  plate_type = "round",
+  colour = viridis_colours
+)
+
+```
+
+
+
+
+-   Generating summary data - mean, SD (based on pID)
+
+```{r, echo=TRUE, warning=FALSE}
+
+#Generating summary data (average, SD & CV) by position (pID) 
+data_all_sum_Nuclei = data_all %>%
+  dplyr::group_by(pID, Row, Column, Position) %>%
+  dplyr::summarise(Nuclei_avg= mean(Log2_Nuclei),
+                   Nuclei_sd = sd(Log2_Nuclei),
+                   Nuclei_cv = 100 * sd(Log2_Nuclei) / mean(Log2_Nuclei),
+                   Nuclei_z_mean = mean(Nuclei_z_score))
+
+```
+
+-   Read in pre-processed plate data with field information
+
+```{r, echo=TRUE, warning=FALSE}
+
+load(file = "/nfs_home/users/czjs/testouts/AP/fov/plate_13_17.RData")
+
+
+```
+
+##### Global data
+
+```{r, echo=FALSE, warning=FALSE}
+
+data_all
+
+```
+
+##### Data Cell numbers
+
+```{r, echo=FALSE, warning=FALSE}
+data_all_sum_Nuclei
+```
+
+##### Data Lipid Accumulation
+
+```{r, echo=FALSE, warning=FALSE}
+data_all_sum_AdipoRED
+```
+
+##### Data Fields of view
+
+```{r, echo=FALSE, warning = FALSE}
+plate_13_17
+```
+
+#### **Visualising Raw data** {.tabset}
+
+##### Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>%
+  ggplot(aes(x=Column, y=Nuclei, color=Position, groups=Row)) +
+  geom_line(colour="grey") +
+  #geom_line(aes(colour=Row)) +
+  geom_point(size=2, alpha=0.5) +
+  theme_pubr() +
+  facet_wrap(~as.character(Plate)) + 
+  scale_color_viridis_d() +
+  ggtitle("Raw data_all Cell numbers (Nuclei count) aggregated by well") +
+  xlab("Column") +ylab("Nuclei numbers") +
+  scale_x_continuous(breaks=1:12)
+  
+```
+
+
+#### **Visualising Log2 Values** {.tabset}
+
+##### Log2_Cell Numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>%
+  ggplot(aes(x=Column, y=Log2_Nuclei, color=Position, groups=Row)) +
+  geom_line(colour="grey") +
+  geom_point(size=2, alpha=0.5) +
+  theme_pubr() +
+  facet_wrap(~as.character(Plate)) + 
+  scale_color_viridis_d() +
+  ggtitle("Log2 Cell number (Nuclei count) aggregated by well") +
+  xlab("Column") +ylab("Log2 Nuclei numbers") +
+  scale_x_continuous(breaks=1:12)
+```
+
+#### **Visualise aggregated CV values** {.tabset}
+
+##### %CV Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all_sum_Nuclei %>%
+  ggplot(aes(x=Column, y=Nuclei_cv, color=Position, groups=Row)) +
+  geom_line(colour="grey") +
+  #geom_line(aes(colour=Row)) +
+  geom_point(size=3, alpha=0.5) +
+  theme_pubr() +
+  scale_color_viridis_d() +
+  geom_text_repel(aes(label = ifelse(Nuclei_cv > 10, pID, "")), 
+                  color = "red", nudge_y = 2, size = 4) +
+  ggtitle("CV for Cell Numbers") +
+  xlab("Column") +ylab("% CV") +
+  scale_x_continuous(breaks=1:12)
+```
+
+##### %CV Lipid Accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+data_all_sum_AdipoRED %>%
+  ggplot(aes(x=Column, y=AdipoRED_cv, color=Position, groups=Row)) +
+  geom_line(colour="grey") +
+  #geom_line(aes(colour=Row)) +
+  geom_point(size=3, alpha=0.5) +
+  theme_pubr() +
+  scale_color_viridis_d() +
+  geom_text_repel(aes(label = ifelse(AdipoRED_cv > 10, pID, "")), 
+                  color = "red", nudge_y = 2, size = 4) +
+  ggtitle("CV for AdipoRED Area per Cell") +
+  xlab("Column") +ylab("% CV") +
+  scale_x_continuous(breaks=1:12)
+
+```
+
+#### **Visualise Raw Data spatially** (by Plate) {.tabset}
+
+##### Raw Data - Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all$Plate <- as.factor(data_all$Plate)
+data_all$Row <- as.factor(data_all$Row)
+
+data_all %>% 
+  ggplot(aes(x=ordered(Column), y=fct_rev(as.factor(Row)), fill=Nuclei,
+             label=round(Nuclei,0))) +
+  geom_tile(color = "white") +
+  geom_text(size=2) +
+  scale_fill_viridis_b() +
+  xlab("Column") +ylab("Row") +
+  labs(title = "Heatmap for individual plates Raw_data - Cell Numbers", 
+       fill = "Nuclei Numbers") +
+  facet_grid(~Plate) +
+  coord_fixed() +
+  theme_pubr()
+```
+
+#### **Visualise Log2 values spatially** (by Plate) {.tabset}
+
+##### Log2 - Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>% 
+  ggplot(aes(x=factor(Column), y=fct_rev(Row), fill=Log2_Nuclei,
+             label=round(Log2_Nuclei,2))) +
+  geom_tile(color = "white") +
+  geom_text(size=2) +
+  scale_fill_viridis_b() +
+  xlab("Column") +ylab("Row") +
+  labs(title = "Heatmap for individual plates by Log2 Cell Numbers", fill = "Log2 Nuclei Numbers") +
+  facet_grid(~Plate) +
+  coord_fixed() +
+  theme_pubr()
+```
+
+##### Log2 - Lipid Accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>% 
+  ggplot(aes(x=factor(Column), y=fct_rev(Row), fill=Log2_AdipoRED,
+             label=round(Log2_AdipoRED,2))) +
+  geom_tile(color = "white") +
+  geom_text(size=2) +
+  scale_fill_viridis_b() +
+  xlab("Column") +ylab("Row") +
+  labs(title = "Heatmap for individual plates by Log2 AdipoRED Area Per Cell", fill = "AdipoRED Area Per Cell") +
+  facet_grid(~Plate) +
+  coord_fixed() +
+  theme_pubr()
+```
+
+#### **Visualise summary data (by plate)** {.tabset}
+
+##### Log2 - Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>% 
+  ggplot(aes(x=factor(Position), y=Log2_Nuclei, fill=Position)) +
+  geom_boxplot() +
+  theme_pubr() +
+  labs(title = "Summary data - Log2 Cell Numbers", y = "Log2 Nuclei Numbers") +
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Log2 - Lipid Accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+data_all %>% 
+  ggplot(aes(x=factor(Position), y=Log2_AdipoRED, fill=Position)) +
+  geom_boxplot() +
+  theme_pubr() +
+  labs(title = "Summary data - Log2 AdipoRED Area Per Cell", y = "Log2 AdipoRED area per cell") +
+  theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Log2 - Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+Log2_nuclei_means <- data_all %>% 
+  group_by(data_all$Position) %>% 
+  summarise(m = mean(Log2_Nuclei))
+
+data_all %>% 
+  ggplot(aes(x=Log2_Nuclei, fill=Position, colour=Position)) +
+  geom_density(alpha = 0.3) +
+  geom_vline(xintercept = unlist(Log2_nuclei_means[1,2]), color = "red", linetype = "dashed")+
+  geom_vline(xintercept = unlist(Log2_nuclei_means[2,2]), color = "blue", linetype = "dashed")+
+  theme_pubr() +
+  labs(title = "Summary data - Log2 Cell Numbers", x = "Log2 Nuclei Numbers", y = "Density")
+
+```
+
+##### Log2 - Lipid Accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+Log2_AdipoRED_means <- data_all %>% 
+  group_by(Position) %>% 
+  summarise(m = mean(Log2_AdipoRED))
+
+
+data_all %>%
+  ggplot(aes(x=Log2_AdipoRED, fill=Position, colour=Position)) +
+  geom_density(alpha = 0.3) +
+  geom_vline(xintercept = unlist(Log2_AdipoRED_means[1,2]), color = "red", linetype = "dashed")+
+  geom_vline(xintercept = unlist(Log2_AdipoRED_means[2,2]), color = "blue", linetype = "dashed")+  theme_pubr() +
+  labs(title = "Summary data - Log2 AdipoRED Area Per Cell", x = "Log2 AdipoRED Area Per Cell", y = "Density")
+```
+
+#### **Summary boxplots for fields of view** {.tabset}
+
+##### Raw Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y=nuclei, x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Raw Cell numbers",
+       x = "Field",
+       y = "Raw count")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+
+```
+
+##### Raw Lipid accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y=area_per_cell, x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Raw Lipid accumulation",
+       x = "Field",
+       y = "Raw area")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Log2 Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y= log_nuclei, x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Log2 Cell numbers",
+       x = "Field",
+       y = "Log2 count")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Log2 Lipid accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y=log2(area_per_cell), x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Log2 Lipid accumulation",
+       x = "Field",
+       y = "Log2 area")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Z score Cell numbers
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y= z_nuclei , x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Z score Cell numbers",
+       x = "Field",
+       y = "Z-score count")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+##### Z score Lipid accumulation
+
+```{r, echo=TRUE, warning=FALSE}
+plate_13_17 %>% 
+  ggplot(aes(y= z_area_per_cell, x=as.factor(Field), fill = position))+
+  geom_boxplot(position = position_dodge(width = 0.7), width = 0.5)+
+  theme_pubr()+
+  labs(title = "Summary data - Z score Lipid accumulation",
+       x = "Field",
+       y = "Z-score area")+
+    theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+# Session Information
+
+```{r, echo=TRUE}
+sessionInfo()
+```

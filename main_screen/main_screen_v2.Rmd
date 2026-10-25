@@ -1,0 +1,2121 @@
+---
+title: "main_screen_v2"
+author: "CZJS"
+date: "2026-01-26"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/main_screen/")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+
+# Functions defined here
+# copied from https://rdrr.io/bioc/imageHTS/man/zprime.html
+
+zprime = function(a, b, method=c('mahalanobis', 'robust', 'fixsd', 'original')) {
+    method = match.arg(method)
+    
+    if (method=='mahalanobis') {
+        if (is.null(dim(a))) a = matrix(a, ncol=1)
+        if (is.null(dim(b))) b = matrix(b, ncol=1)
+        mua = apply(a, 2, mean)
+        mub = apply(b, 2, mean)
+        dm = try(mahalanobis(mua, mub, cov(a) + cov(b)))
+        if (class(dm)=='try-error') NA
+        else 1-3/sqrt(dm)
+    }
+    else {
+        if (method=='robust') 1-3*(mad(a)+mad(b))/abs(median(a)-median(b))
+        else if (method=='fixsd') 1-3*sqrt(var(a)+var(b))/abs(mean(a)-mean(b))
+        else 1-3*(sd(a)+sd(b))/abs(mean(a)-mean(b))
+    }
+}
+
+
+investigate_raw_maps <- function(to_plot, request){
+    request <- eval(request)
+    request <- quo_name(enquo(request))
+    
+    raw_map(data = to_plot[[request]], 
+            well = to_plot$WellName, 
+            plate = 96) + labs(title = request)
+}
+
+#source("../screening/catHeader.R")
+
+```
+
+
+Loading libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(bit64)
+library(NbClust)
+library(pheatmap)
+library(umap)
+library(platetools)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+
+
+
+```
+
+
+First things first, time to clean the data and assign the correct well and genes to each plate. The library of lentiviruses were rearranged by quadrant!
+Using some excel magic, I've made a gene key and will merge them here:
+
+
+```{r genekeys}
+
+quad_gene_key <- fread("Quad rearrangements.txt")
+
+quad_gene_key$Well <- str_replace_all(quad_gene_key$Well,"0(?=\\d)", "")
+
+plate_file_names <- list.files(pattern = "SIMA_V5", full.names = F)
+
+plates_list <- sapply(plate_file_names, fread, simplify = F, USE.NAMES = T)
+
+all_plates <- rbindlist(plates_list, idcol = "plate") %>%  #figured it out... the order of plates is not 1,2,3 but 1,10 etc
+    dplyr::select(-c("Number of Analyzed Fields", "Spots - Spot Area [px²] - Min per Well" )) #bc spot area min is all 1, scaling and centreing it makes NaN values
+
+p1_3 <- left_join(all_plates[all_plates$plate %in% c("P1_SIMA_V5.txt", "P2_SIMA_V5.txt", "P3_SIMA_V5.txt")], quad_gene_key[,c(1,2)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Original")
+p4_6 <- left_join(all_plates[all_plates$plate %in% c("P4_SIMA_V5.txt","P5_SIMA_V5.txt","P6_SIMA_V5.txt")], quad_gene_key[,c(1,3)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp1")
+p7_9 <- left_join(all_plates[all_plates$plate %in% c("P7_SIMA_V5.txt","P8_SIMA_V5.txt","P9_SIMA_V5.txt")], quad_gene_key[,c(1,4)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp2")
+p10_12 <- left_join(all_plates[all_plates$plate %in% c("P10_SIMA_V5.txt","P11_SIMA_V5.txt","P12_SIMA_V5.txt")], quad_gene_key[,c(1,5)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp3")
+
+final_plate_list <- bind_rows(p1_3, p4_6, p7_9, p10_12)
+
+
+
+```
+
+
+Quick PCA, no special normalisation
+
+
+```{r pcageneric}
+
+
+pca_plot_data <-  final_plate_list %>%  filter(Gene != "Empty")
+
+
+
+rownames(pca_plot_data) <- make.names(pca_plot_data$Gene, unique = T)
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_plate <- subset(pca_plot_data, select = -c(plate, Row, Col, WellName, Gene)) %>% 
+    mutate_if(is.integer64, as.numeric)
+
+scaled_plate <- scale(numeric_plate)
+
+pca_bp <- princomp(scaled_plate)
+
+summary(pca_bp)
+
+fviz_eig(pca_bp)
+
+
+fviz_pca_var(pca_bp,axes = c(1,2), col.var = "black", repel = T)+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_biplot(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+### habillage
+
+pca_plot <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                         habillage = pca_plot_data$Gene, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot)
+
+
+
+```
+
+
+Feature correlation check
+
+```{r corrs}
+
+bp_cor <- cor(numeric_plate, use = "complete.obs")
+
+heatmaply_cor(x = bp_cor,
+              fontsize_row = 7,
+              fontsize_col = 7,
+              colors = viridis(200, option = "magma",),
+              #colors = "RdYlBu",
+              hide_colorbar = TRUE)
+
+```
+
+
+Just checking UMAP too
+```{r umap}
+
+
+
+pca_plot_data <-  final_plate_list # %>%  filter(Gene != "ZFP62")
+
+rownames(pca_plot_data) <- make.names(pca_plot_data$Gene, unique = T)
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_plate <- subset(pca_plot_data, select = -c(plate, Row, Col, WellName, Gene)) %>% 
+    mutate_if(is.integer64, as.numeric)
+
+scaled_plate <- scale(numeric_plate)
+b_scored_umap <- umap(scaled_plate)
+
+b_score_layout <- b_scored_umap$layout %>% 
+    as.data.frame()
+
+b_score_plot_data <- cbind(b_score_layout, rownames(pca_plot_data))
+
+fig <- plot_ly(b_score_plot_data, x = ~V1, y = ~V2,
+               color = ~pca_plot_data$Gene,
+               type = 'scatter', mode = 'markers',
+               marker = list(size = 20))%>%  
+    layout(
+        plot_bgcolor = "white",
+        legend=list(title=list(text='features')), 
+        xaxis = list( 
+            title = "0"),  
+        yaxis = list( 
+            title = "1")) 
+
+
+fig
+
+```
+
+
+There's a distinct plate effect actually.
+Also interesting that despite P5 being flung around and sitting outside in a TC hood cold for a few hours, didn't really affect it
+
+```{r pcabatch}
+
+
+
+pca_plot_batch <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                               habillage = pca_plot_data$plate, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot_batch)
+
+```
+
+
+
+
+Then Z-scores for each gene according to pop. literature:
+
+```{r Z scores}
+
+
+### should be done per plate
+### and the mean of all vars instead of just NTC for the first z score...
+
+
+mean_NTC <- mean(final_plate_list$`Nuclei Selected Selected - Number of Objects`[str_detect(final_plate_list$Gene, "NTC")])
+
+
+mean_all <- mean(final_plate_list$`Nuclei Selected Selected - Number of Objects`)
+stdev <- sd(final_plate_list$`Nuclei Selected Selected - Number of Objects`)
+
+
+all_plate_effect_sizes <- final_plate_list %>% 
+    mutate(
+        nuclei_count_z_score = ((`Nuclei Selected Selected - Number of Objects`-mean_all)/stdev),
+        sigma_z_score =  sd(nuclei_count_z_score[str_detect(Gene, "NTC")]),
+        nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+    )
+
+ggplotly(ggplot(all_plate_effect_sizes, mapping = aes(x = Gene, y = nuclei_count_effect_size)) + 
+             geom_boxplot())
+
+
+mean_all <- mean(final_plate_list$`Spots - Spot Area [px²] - Median per Well`)
+stdev <- sd(final_plate_list$`Spots - Spot Area [px²] - Median per Well`)
+
+
+all_plate_effect_sizes <- final_plate_list %>% 
+    mutate(
+        nuclei_count_z_score = ((`Spots - Spot Area [px²] - Median per Well`-mean_NTC)/stdev),
+        sigma_z_score =  sd(nuclei_count_z_score[str_detect(Gene, "NTC")]),
+        nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+    )
+
+ggplotly(ggplot(all_plate_effect_sizes, mapping = aes(x = Gene, y = nuclei_count_z_score)) + 
+             geom_boxplot())
+
+
+
+mean_all <- mean(final_plate_list$`Spots - Spot Area [px²] - Mean per Well`)
+stdev <- sd(final_plate_list$`Spots - Spot Area [px²] - Mean per Well`)
+
+
+all_plate_effect_sizes <- final_plate_list %>% 
+    mutate(
+        nuclei_count_z_score = ((`Spots - Spot Area [px²] - Mean per Well`-mean_NTC)/stdev),
+        sigma_z_score =  sd(nuclei_count_z_score[str_detect(Gene, "NTC")]),
+        nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+    )
+
+ggplotly(ggplot(all_plate_effect_sizes, mapping = aes(x = Gene, y = nuclei_count_z_score)) + 
+             geom_boxplot())
+
+```
+
+
+
+```{r loessforreal}
+# OK OK. LOESS THEN Z SCORE
+
+loess_dataset <- final_plate_list
+
+variables_of_interest <- setdiff(colnames(final_plate_list), c("plate", "WellName", "Row", "Col", "Gene"))
+
+rownames(loess_dataset) <- make.unique(loess_dataset$Gene)
+
+loess_models <- lapply(variables_of_interest, function(x) {
+    loess(as.formula(paste0("`",x,"`", " ~ Row + Col")),
+          data = loess_dataset,
+          span = 1,  # Adjust?
+          degree = 1)    # Linear fit recommended for spatial patterns
+})
+
+names(loess_models) <- variables_of_interest
+
+loess_fits <- lapply(variables_of_interest, function(y) {
+    loess_models[[y]]["fitted"]
+}) 
+names(loess_fits) <- variables_of_interest
+
+
+loess_results <- lapply(variables_of_interest, function(z){
+    loess_models[[z]][["y"]]-(loess_fits[[z]][["fitted"]]-median(loess_fits[[z]][["fitted"]]))
+})
+
+names(loess_results) <- variables_of_interest
+
+df_loess_results <- data.table(do.call(bind_cols, loess_results))
+
+df_loess_results <- bind_cols(df_loess_results, loess_dataset %>% dplyr::select(c("plate", "Row", "Col", "WellName", "Gene")))
+
+
+### Visualise the loessing if need:
+# not fully corrected
+# raw_map(data = final_plate_list$`Spots - Spot Area [px²] - Median per Well`,
+#         well = final_plate_list$WellName,
+#         plate = 96)
+# 
+# 
+# raw_map(data = df_loess_results[df_loess_results$plate == "P1_SIMA_V1.txt"] %>% dplyr::select(`Spots - Spot Area [px²] - Median per Well`),
+#         well = df_loess_results[df_loess_results$plate == "P1_SIMA_V1.txt"] %>% dplyr::select(WellName),
+#         plate = 96)
+
+
+
+### Z scores per plate on loess normalised data
+variables_of_interest <- setdiff(colnames(df_loess_results), c("plate","WellName","Row","Col","Gene"))
+
+which_plate <- unique(df_loess_results$plate)
+
+all_plate_z_scores <- data.table()
+
+for (j in seq_along(which_plate)) {
+    
+    # test
+    #print(which_plate[j])
+    
+    ### SUBSET DATA TO PLATE LEVEL FOR Z-SCORE CALCULATIONS
+    temp_plate_list <- df_loess_results %>% dplyr::filter( plate == which_plate[j])
+    
+    ### BEGIN 2ND LOOP FOR Z SCORE CALCS
+    
+    
+    for (i in seq_along(variables_of_interest)) {
+        
+        #print(variables_of_interest[i])
+        
+        temp_var <- variables_of_interest[i]
+        
+        ### First get the mean and stdev which can change per iteration
+        mean_NTC_var <- mean(temp_plate_list[[temp_var]]) # mean of variable across all genes
+        stdev_var <- sd(temp_plate_list[[temp_var]]) # standard deviation for var across all genes
+        
+        
+        ### Then get the Z-score
+        temp_plate_list <- temp_plate_list %>%
+            mutate(
+                !!paste0(temp_var,"_z_score") := ( (.data[[temp_var]] - mean_NTC_var) / stdev_var)
+            ) # this madness is needed for strings to become variable names
+        ### Then the Sigma Z score
+        assign(paste0("`",temp_var,"sigma_z_score","`"), sd(temp_plate_list[[paste0(temp_var,"_z_score")]][str_detect(temp_plate_list$Gene, "NTC")]))
+        #print(eval(as.name(paste0("`",temp_var,"sigma_z_score","`")), envir= .GlobalEnv)) #debugging
+        
+        ### Then the effect sizes
+        temp_plate_list <- temp_plate_list %>%
+            mutate(
+                !!paste0(temp_var,"effect_size") := .data[[paste0(temp_var,"_z_score")]] /eval(as.name(paste0("`",temp_var,"sigma_z_score","`")), envir= .GlobalEnv)
+            )
+        
+    }
+    
+    ### ONCE ALL CALCULATED BIND ONTO PREVIOUS RESULTS
+    all_plate_z_scores <- bind_rows(all_plate_z_scores, temp_plate_list)
+    
+}    
+
+
+
+```
+
+
+```{r alleffectsizes}
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), Gene)
+
+ggplotly(ggplot(all_plate_effect_sizes, mapping = aes(x = Gene, y = nuclei_count_z_score)) + 
+             geom_boxplot())
+
+```
+
+
+```{r zprimecheck}
+
+
+### Z prime checks
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), Gene)
+
+a <- final_plate_list[final_plate_list$Gene == "IRS1"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Median per Well`)%>% 
+    as_vector()
+
+b <- final_plate_list[final_plate_list$Gene == "PTEN"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Median per Well`)%>% 
+    as_vector()
+
+c <- z_scores_post_loess_only[z_scores_post_loess_only$Gene == "IRS1"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Median per Well_z_score`)%>% 
+    as_vector()
+
+d <- z_scores_post_loess_only[z_scores_post_loess_only$Gene == "PTEN"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Median per Well_z_score`)%>% 
+    as_vector()
+
+
+
+zprime(a,b, method = "original")
+zprime(c,d, method = "original")
+
+zprime(a,b, method = "mahalanobis")
+zprime(c,d, method = "mahalanobis") 
+
+zprime(a,b, method = "robust")
+zprime(c,d, method = "robust") # uses median, and is the only one which shows improvement
+
+zprime(a,b, method = "fixsd")
+zprime(c,d, method = "fixsd")
+
+
+
+
+
+```
+
+
+It appears that z factor + loess helped with the z prime score in only the robust one... Well I am just testing the spot area score
+
+
+```{r top5genes}
+
+
+### which genes are the most extreme then?
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), Gene, plate)
+
+which_col <- setdiff(colnames(z_scores_post_loess_only), c("Gene", "plate", "Row", "Col", "WellName"))
+top_5_genes_zscore <- data.table(Rank = c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th"))
+temp_top_genes <- data.table()
+for (i in seq_along(which_col)) {
+    
+    temp_top_genes <- z_scores_post_loess_only %>%
+        group_by(Gene) %>% 
+        summarise_at(vars(-c(plate)), median) %>% 
+        slice_max(.data[[which_col[i]]], n = 7) %>% 
+        dplyr::select(Gene) %>% 
+        dplyr::rename(!!which_col[i] := Gene)
+    
+    top_5_genes_zscore <- bind_cols(top_5_genes_zscore, temp_top_genes)
+}
+
+top_5_genes_zscore
+
+
+
+median_z_score <- z_scores_post_loess_only %>%
+    group_by(Gene) %>% 
+    summarise_at(vars(-c(plate)), median)
+
+# arranged_by_nuc_count_spot <- arrange(median_z_score, desc(`Nuclei Selected - Number of Objects_z_score`) , `Lipid_droplets - Lipid_droplets Area [µm²] - Sum per Well_z_score`) %>% mutate(rank = 1:n())
+
+#write_csv(top_5_genes_zscore, "top_5_genes_zscore.csv")
+
+
+```
+
+
+```{r pcapostnormalandnoempty}
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), Gene, Row, Col, WellName, plate)
+
+pca_plot_data <- z_scores_post_loess_only %>%  filter(Gene != "Empty")
+
+
+rownames(pca_plot_data) <- make.names(pca_plot_data$Gene, unique = T)
+# 
+# #change colnames
+# 
+# qux <- pca_plot_data
+# 
+# colnames(qux)
+# 
+# colnames(qux) <- c("Nuclei count",
+#                    "Nucleus Area",
+#                    "Nucleus Roundness",
+#                    "Cell Area",
+#                    "Cell Roundness",
+#                    "Cell Ratio Width to Length",
+#                    "Intensity MitoTracker Mean",
+#                    "Intensity MitoTracker Sum",
+#                    "Spot count",
+#                    "Relative Spot Intensity",
+#                    "Spot Area",
+#                    "Lipid droplets Area",
+#                    "Lipid droplets Intensity",
+#                    "Gene",
+#                    "Row",
+#                    "Col",
+#                    "WellName",
+#                    "plate")
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_plate <- subset(pca_plot_data, select = -c(plate, Row, Col, WellName, Gene)) %>% 
+    mutate_if(is.integer64, as.numeric)
+
+scaled_plate <- scale(numeric_plate)
+
+pca_bp <- princomp(scaled_plate)
+
+summary(pca_bp)
+
+fviz_eig(pca_bp)
+
+
+fviz_pca_var(pca_bp,axes = c(1,2), col.var = "black", repel = T)+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_biplot(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+### habillage
+
+pca_plot <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                         habillage = pca_plot_data$Gene, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot)
+
+
+
+
+pca_plot_batch <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                               habillage = pca_plot_data$plate, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot_batch)
+
+
+### prettier variable contribution plots
+
+
+
+var_contribs <- fviz_contrib(pca_bp, choice = "var")
+
+ggplotly(var_contribs)
+
+
+var_contribs <- fviz_contrib(pca_bp, choice = "var", axes = 2)
+
+ggplotly(var_contribs)
+
+fviz_pca_var(pca_bp,
+             repel = TRUE,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+)
+
+plot_ly(as.data.frame(pca_bp$scores[,c(1,2,3)]), 
+        x = ~Comp.1, 
+        y = ~Comp.2, 
+        z = ~Comp.3, 
+        color = ~pca_plot_data$Gene, 
+        colors = viridis(n=4, begin = 0.1, end = 0.9, option = "magma")) %>%
+    add_markers() %>% 
+    hide_colorbar() 
+```
+
+
+```{r mostrespresentativepc}
+
+
+ind_contributions <- get_pca(pca_bp, "ind")
+
+genes_left <- z_scores_post_loess_only %>%  filter(Gene != "Empty")
+
+hmm <- ind_contributions$contrib %>% bind_cols(Gene = genes_left$Gene)
+
+max_col1 <- hmm %>% 
+    group_by(Gene) %>%
+    summarise_all(median) %>%
+    slice_max(Dim.1, n = 5) 
+
+
+max_col2 <- hmm %>% 
+    group_by(Gene) %>%
+    summarise_all(median) %>%
+    slice_max(Dim.2, n = 5) 
+
+# check if the ordering of things have changed...
+
+max_col1_mean <- hmm %>% 
+    group_by(Gene) %>%
+    summarise_all(mean) %>%
+    slice_max(Dim.1, n = 5) 
+max_col1_mean
+
+max_col2_mean <- hmm %>% 
+    group_by(Gene) %>%
+    summarise_all(mean) %>%
+    slice_max(Dim.2, n = 5)
+max_col2_mean
+```
+
+```{r platerep}
+
+
+quad_gene_key
+
+library(ggplate)
+
+# Create a 96-well plot with labels
+plate_plot(
+    data = quad_gene_key,
+    position = Well,
+    value = Original,
+    label = Original,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = F,
+    label_size = 1.9,
+    colour = rainbow(n = 96, s=1, v=0.6)
+)
+
+```
+
+```{r umapnormalised}
+
+
+norm_umap <- umap(scaled_plate)
+
+norm_layout <- norm_umap$layout %>% 
+    as.data.frame()
+
+norm_plot_data <- cbind(norm_layout, rownames(pca_plot_data))
+
+fig <- plot_ly(norm_plot_data, x = ~V1, y = ~V2,
+               color = ~pca_plot_data$Gene,
+               type = 'scatter', mode = 'markers',
+               marker = list(size = 20))%>%  
+    layout(
+        plot_bgcolor = "white",
+        legend=list(title=list(text='features')), 
+        xaxis = list( 
+            title = "0"),  
+        yaxis = list( 
+            title = "1")) 
+
+
+fig
+
+```
+
+```{r corr}
+
+
+pheatmap(scaled_plate, angle_col = 45, fontsize = 5)
+
+# 
+# 
+# med_plate <- qux %>% 
+#     dplyr::select(c(`Nuclei count`)) %>% 
+#     group_by(Gene) %>%
+#     summarise(across(everything(), ~median(.x, na.rm = T))) %>% 
+#     as.data.frame()
+# 
+# rownames(med_plate) <- make.names(med_plate$Gene, unique = T)
+# 
+# numeric_med_plate <- subset(med_plate, select = -c(Gene))
+# 
+# scaled_med_plate <- scale(numeric_med_plate)
+# 
+# pheatmap(scaled_med_plate, angle_col = 45, fontsize = 10)
+# 
+
+```
+
+```{r statsforabstracts}
+
+
+# should be done on the unnormalised data?
+mean_PTEN_spot <- final_plate_list[final_plate_list$Gene == "PTEN"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Well`)%>% 
+    summarise(mean = mean(`Spots - Spot Area [px²] - Mean per Well`)) %>% as.numeric()
+
+mean_PYGO2_spot <- final_plate_list[final_plate_list$Gene == "PYGO2"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Well`)%>% 
+    summarise(mean = mean(`Spots - Spot Area [px²] - Mean per Well`)) %>% as.numeric()
+
+mean_ZFP_spot <- final_plate_list[final_plate_list$Gene == "ZFP36L2"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Well`)%>% 
+    summarise(mean = mean(`Spots - Spot Area [px²] - Mean per Well`)) %>% as.numeric()
+
+mean_AAVS1_spot <- final_plate_list[final_plate_list$Gene == "AAVS1"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Well`)%>% 
+    summarise(mean = mean(`Spots - Spot Area [px²] - Mean per Well`)) %>% as.numeric()
+
+mean_NTC3_spot <- final_plate_list[final_plate_list$Gene == "NTC3"] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Well`)%>% 
+    summarise(mean = mean(`Spots - Spot Area [px²] - Mean per Well`)) %>% as.numeric()
+
+#based on ntc3 or aavs1...
+spot_increase <- ((mean_ZFP_spot-mean_AAVS1_spot)/mean_AAVS1_spot)*100 #42.9% increase
+
+spot_increase <- ((mean_PTEN_spot-mean_AAVS1_spot)/mean_AAVS1_spot)*100 #88.39% increase
+
+spot_increase <- ((mean_PYGO2_spot-mean_AAVS1_spot)/mean_AAVS1_spot)*100 #9.9% increase
+
+spot_increase <- ((mean_ZFP_spot-mean_NTC3_spot)/mean_NTC3_spot)*100 #33% increase
+
+```
+
+
+```{r anovas}
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), Gene, Row, Col, WellName, plate)
+
+pca_plot_data <- z_scores_post_loess_only %>%  filter(Gene != "Empty")
+
+
+### spot count
+
+spot_count_df <- data.frame(spot_count = pca_plot_data$`Spots - Number of Objects_z_score`,
+                            gene = pca_plot_data$Gene) #pca_plot_data$`Spots - Spot Area [px²] - Mean per Well_z_score`
+
+# Perform ANOVA
+anova_result_sc <- aov(spot_count ~ gene, data = spot_count_df)
+summary(anova_result_sc)
+
+plot(anova_result_sc)
+
+
+# Use the Dunnett's test because Tukey compares everything to everything
+# meaning for our case of 70 genes +5 controls, 75C2 = 2775
+
+library(DescTools)
+sc_ctrl <- DunnettTest(x=spot_count_df$spot_count, g=spot_count_df$gene, control = "AAVS1")
+dunnett_summary_sc <- as.data.frame(sc_ctrl$AAVS1) %>% 
+    mutate(comparisons = rownames(.))
+
+###
+
+ds_sc <- dunnett_summary_sc %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    dplyr::arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+#add a simple significance label
+
+ds_sc <- ds_sc %>% mutate(sig = case_when( pval < 0.05 ~ "TRUE", .default="FALSE" ))
+
+
+ggplot(ds_sc, aes(x = diff, y = contrast)) + 
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+    geom_point(aes(color = pval < 0.05), size = 2) +
+    #geom_text(aes(label = sig), hjust = -0.3, vjust = 0.5) +
+    scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+    labs(x = "Difference vs AAVS1 (diff)", y = "",
+         color = "Significant",
+         title = "Dunnett test estimates and 95% CI - Spot area mean") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 9))
+
+### thank you chatgpt
+
+
+### nuclei count ###
+
+nc_intensity_df <- data.frame(nc_intensity = pca_plot_data$`Nuclei Selected Selected - Number of Objects_z_score`,
+                              gene = pca_plot_data$Gene)
+
+# Perform ANOVA
+anova_result_nc <- aov(nc_intensity ~ gene, data = nc_intensity_df)
+summary(anova_result_nc)
+
+# Dunnett's test
+
+nc_ctrl <- DunnettTest(x=nc_intensity_df$nc_intensity, g=nc_intensity_df$gene, control = "AAVS1")
+dunnett_summary_nc <- as.data.frame(nc_ctrl$AAVS1) %>% 
+    mutate(comparisons = rownames(.))
+
+# Plotting
+
+ds_nc <- dunnett_summary_nc %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+#add a simple significance label
+
+ds_nc <- ds_nc %>% mutate(sig = case_when( pval < 0.05 ~ "TRUE", .default="FALSE" ))
+
+
+ggplot(ds_nc, aes(x = diff, y = contrast)) + 
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+    geom_point(aes(color = pval < 0.05), size = 2) +
+    #geom_text(aes(label = sig), hjust = -0.3, vjust = 0.5) +
+    scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+    labs(x = "Difference vs AAVS1 (diff)", y = "",
+         color = "Significant",
+         title = "Dunnett test estimates and 95% CI - Cell count") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 9))
+
+
+### mt intensity mean ###
+
+mt_intensity_df <- data.frame(mt_intensity = pca_plot_data$`Nuclei Selected - Intensity Cell MitoTracker Deep Red Mean - Median per Well_z_score`,
+                              gene = pca_plot_data$Gene)
+
+# Perform ANOVA
+anova_result_mt <- aov(mt_intensity ~ gene, data = mt_intensity_df)
+summary(anova_result_mt)
+
+# Dunnett's test
+
+mt_ctrl <- DunnettTest(x=mt_intensity_df$mt_intensity, g=mt_intensity_df$gene, control = "AAVS1")
+dunnett_summary_mt <- as.data.frame(mt_ctrl$AAVS1) %>% 
+    mutate(comparisons = rownames(.))
+
+# Plotting
+
+ds_mt <- dunnett_summary_mt %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+#add a simple significance label
+
+ds_mt <- ds_mt %>% mutate(sig = case_when( pval < 0.05 ~ "TRUE", .default="FALSE" ))
+
+
+ggplot(ds_mt, aes(x = diff, y = contrast)) + 
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+    geom_point(aes(color = pval < 0.05), size = 2) +
+    #geom_text(aes(label = sig), hjust = -0.3, vjust = 0.5) +
+    scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+    labs(x = "Difference vs AAVS1 (diff)", y = "",
+         color = "Significant",
+         title = "Dunnett test estimates and 95% CI - Mitochondrial intensity") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 9))
+
+
+
+```
+
+
+
+```{r dunnettsrotatedsc}
+
+### spot count
+
+spot_count_df <- data.frame(spot_count = pca_plot_data$`Spots - Spot Area [px²] - Mean per Well_z_score`,
+                            gene = pca_plot_data$Gene)
+
+# Perform ANOVA
+anova_result_sc <- aov(spot_count ~ gene, data = spot_count_df)
+summary(anova_result_sc)
+
+
+# Use the Dunnett's test because Tukey compares everything to everything
+# meaning for our case of 70 genes +5 controls, 75C2 = 2775
+
+library(DescTools)
+sc_ctrl <- DunnettTest(x=spot_count_df$spot_count, g=spot_count_df$gene, control = "AAVS1")
+dunnett_summary_sc <- as.data.frame(sc_ctrl$AAVS1) %>% 
+    mutate(comparisons = rownames(.))
+
+###
+
+ds_sc <- dunnett_summary_sc %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    dplyr::arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+
+# ds_sc: data frame with columns contrast, diff, lwr.ci, upr.ci, pval
+
+# Prepare data: set ordering for contrasts and numeric x positions
+ds_plot <- ds_sc %>%
+    # order contrasts in the desired plotting order; change as needed
+    arrange(diff) %>%
+    mutate(
+        contrast = factor(contrast, levels = unique(contrast)),
+        x_idx = as.numeric(contrast),
+        signif = pval < 0.05
+    )
+
+# Continuous ribbon: geom_ribbon expects x (numeric) and ymin/ymax per x
+ggplot(ds_plot, aes(x = x_idx)) +
+    # continuous ribbon connecting lwr/upr across x positions
+    geom_ribbon(aes(ymin = lwr.ci, ymax = upr.ci, fill = signif, group = 1),
+                #              fill = "lightblue",
+                alpha = 0.45,
+                inherit.aes = TRUE) +
+    # dashed zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # line through the point estimates
+    geom_point(aes(y= diff, group =1 ), size = 1.5, colour = "black") +
+    geom_line(aes(y = diff, group = 1), color = "black", size = 0.8) +
+    # map numeric x back to contrast labels
+    # scale_x_continuous(breaks = ds_plot$x_idx, labels = levels(ds_plot$contrast)) +
+    scale_fill_manual(values = c("FALSE" = "grey", "TRUE" = "steelblue1")) +
+    #    scale_colour_manual(values = c("FALSE" = "grey", "TRUE" = "steelblue1")) +
+    labs(x = "Genes ordered by difference to AAVS1", y = "Difference vs AAVS1",
+         title = "Dunnett test estimates and 95% CI - Spot area mean") +
+    theme_minimal()+
+    theme(legend.text = element_text(size=10))
+
+
+
+```
+
+
+```{r dunnettsrotatednc}
+
+### nuclei count ###
+
+nc_intensity_df <- data.frame(nc_intensity = pca_plot_data$`Nuclei Selected Selected - Number of Objects_z_score`,
+                              gene = pca_plot_data$Gene)
+
+# Perform ANOVA
+anova_result_nc <- aov(nc_intensity ~ gene, data = nc_intensity_df)
+summary(anova_result_nc)
+
+# Dunnett's test
+
+nc_ctrl <- DunnettTest(x=nc_intensity_df$nc_intensity, g=nc_intensity_df$gene, control = "AAVS1")
+dunnett_summary_nc <- as.data.frame(nc_ctrl$AAVS1) %>% 
+    mutate(comparisons = rownames(.))
+
+# Plotting
+
+ds_nc <- dunnett_summary_nc %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+#add a simple significance label
+
+ds_nc <- ds_nc %>% mutate(sig = case_when( pval < 0.05 ~ "TRUE", .default="FALSE" ))
+
+# Prepare data: set ordering for contrasts and numeric x positions
+ds_plot <- ds_nc %>%
+    # order contrasts in the desired plotting order; change as needed
+    arrange(diff) %>%
+    mutate(
+        contrast = factor(contrast, levels = unique(contrast)),
+        x_idx = as.numeric(contrast),
+        signif = pval < 0.05
+    )
+
+# Continuous ribbon: geom_ribbon expects x (numeric) and ymin/ymax per x
+ggplot(ds_plot, aes(x = x_idx)) +
+    # continuous ribbon connecting lwr/upr across x positions
+    geom_ribbon(aes(ymin = lwr.ci, ymax = upr.ci, fill = signif, group = 1),
+                #              fill = "lightblue",
+                alpha = 0.45,
+                inherit.aes = TRUE) +
+    # dashed zero line
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    # line through the point estimates
+    geom_point(aes(y= diff, group =1 ), size = 1.5, colour = "black") +
+    geom_line(aes(y = diff, group = 1), color = "black", size = 0.8) +
+    # map numeric x back to contrast labels
+    # scale_x_continuous(breaks = ds_plot$x_idx, labels = levels(ds_plot$contrast)) +
+    scale_fill_manual(values = c("FALSE" = "grey", "TRUE" = "steelblue1")) +
+    #    scale_colour_manual(values = c("FALSE" = "grey", "TRUE" = "steelblue1")) +
+    labs(x = "Genes ordered by difference to AAVS1", y = "Difference vs AAVS1",
+         title = "Dunnett test estimates and 95% CI - Cell count") +
+    theme_minimal()+
+    theme(legend.text = element_text(size=10))
+
+
+```
+
+
+```{r checkpoissonvsnbcountdata}
+
+#trying to find a better fit rippp
+# bc the normal lm model shows not great qq plots (heavy tails)
+
+library(MASS)
+
+
+### spot count
+
+spot_count_df_extended <- data.frame(spot_count = pca_plot_data$`Spots - Spot Area [px²] - Mean per Well_z_score`,
+                                     gene = pca_plot_data$Gene, plate = pca_plot_data$plate)
+
+
+fit_pois <- glm(spot_count ~ gene + plate, data=spot_count_df_extended, family=poisson())
+
+fit_nb   <- glm.nb(spot_count ~ gene + plate, data=spot_count_df_extended)
+
+AIC(fit_pois, fit_nb)
+anova(fit_pois, fit_nb, test="LRT")  # NB vs Poisson (if compatible)
+
+
+
+
+
+```
+
+
+
+
+
+
+
+### Feature breakdown, raw values, plate 1 {.tabset .tabset-pills}
+
+
+```{r 96wellmaps, results='asis', echo=FALSE}
+# 
+# plate_1 <- qux %>% dplyr::filter(plate == "P1_SIMA_V5.txt")
+# 
+# pltting_list <- colnames(final_plate_list) #get list of variables to plot
+# 
+# 
+# pltting_list <-  pltting_list[! pltting_list %in% c("Row", "Col", "WellName", "Gene", "plate")] 
+# 
+# plot_compile <- list() #start an empty list for storing the plots
+# 
+# for (i in seq_along(pltting_list)) { # loop across the list of variables to plot
+#     
+#     name <- paste0(pltting_list[i]) #make names for each plot
+#     plot_compile[[name]] <- investigate_raw_maps(to_plot = plate_1, #store in each unique name this following ggplot
+#                                                  request = pltting_list[i])
+#     
+# }
+# 
+# for (j in seq_along(plot_compile)) { # loop across list of plots
+#     
+#     tmp <- plot_compile[[j]] # store temporarily each ggplot
+#     
+#     catHeader(pltting_list[j], 4) #for tabs. comment out to see all at once
+#     
+#     print(tmp) #print each ggplot
+#     
+# }
+
+
+
+
+```
+
+
+```{r ntcgraphs}
+
+
+ggplot(final_plate_list %>% dplyr::filter(Gene == "NTC3"), aes(x = plate, y = `Nuclei Selected Selected - Number of Objects`))+
+    geom_boxplot()
+
+
+ggplot(df_loess_results %>% dplyr::filter(Gene == "NTC3"), aes(x = plate, y = `Nuclei Selected Selected - Number of Objects`))+
+    geom_boxplot()
+
+
+ggplot(effect_sizes_only %>% dplyr::filter(Gene == "NTC3"), aes(x = plate, y = `Nuclei Selected Selected - Number of Objectseffect_size`))+
+    geom_boxplot()
+
+
+ggplot(z_scores_post_loess_only %>% dplyr::filter(Gene == "NTC3"), aes(x = plate, y = `Nuclei Selected Selected - Number of Objects_z_score`))+
+    geom_boxplot()
+
+
+
+
+
+
+```
+
+
+
+```{r effectssizesashits}
+
+### Effect size heatmaps
+# effect_sizes_only <- all_plate_effect_sizes_before_norm %>% 
+#     dplyr::select(contains("effect_size"), Gene, Row, Col, WellName, plate)
+
+### Effect size heatmaps
+effect_sizes_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("effect_size"), Gene, Row, Col, WellName, plate)
+
+
+
+effect_sizes_only_picked  <- effect_sizes_only[ Gene %in% c("ZFP36L2", "TIPARP", "SOCS3", "PPP2R5A", "ZNF423", "PSMA1", "MAP3K1", "PYGO2", "TAF5L", "CBX3", "TSEN2", "TCF7L2", "KLF13", "TIMP4", "INO80E")] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Welleffect_size`, Gene) %>% 
+    dplyr::group_by(Gene) %>% 
+    dplyr::summarise(mean_effect = mean(`Spots - Spot Area [px²] - Mean per Welleffect_size`))
+
+
+effect_sizes_only_picked_pt2  <- effect_sizes_only[ Gene %in% c("PTEN", "ZFP36L2", "TIPARP", "SOCS3", "PPP2R5A", "ZNF423", "PSMA1", "MAP3K1", "PYGO2", "TAF5L", "CBX3", "TSEN2", "TCF7L2", "KLF13", "TIMP4", "INO80E", "CCND1", "NOB1", "MORF4L1", "AK4", "POLA1", "PRRX1", "PRELID3B", "FLOT1", "TUBB")] %>% 
+    dplyr::select(`Spots - Spot Area [px²] - Mean per Welleffect_size`, Gene) %>% 
+    dplyr::group_by(Gene) %>% 
+    dplyr::summarise(mean_effect = mean(`Spots - Spot Area [px²] - Mean per Welleffect_size`))
+
+
+
+effect_sizes_only_picked_mt  <- effect_sizes_only[ Gene %in% c("MAP3K1", "LEKR1")] %>% 
+    dplyr::select(`Nuclei Selected - Intensity Cell MitoTracker Deep Red Median - Median per Welleffect_size`, Gene) %>% 
+    dplyr::group_by(Gene) %>% 
+    dplyr::summarise(mean_effect = mean(`Nuclei Selected - Intensity Cell MitoTracker Deep Red Median - Median per Welleffect_size`))
+
+
+effect_sizes_only_picked_mt  <- effect_sizes_only[ Gene %in% c("MAP3K1", "LEKR1")] %>% 
+    dplyr::select(`Cytoplasm selected - Intensity Cell MitoTracker Deep Red Mean - Mean per Welleffect_size`, Gene) %>% 
+    dplyr::group_by(Gene) %>% 
+    dplyr::summarise(mean_effect = mean(`Cytoplasm selected - Intensity Cell MitoTracker Deep Red Mean - Mean per Welleffect_size`))
+
+
+
+
+
+
+```
+
+
+```{r bigchunk}
+
+# with the help of chatgpt
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# ------------------------------------------------------------
+# Settings and input checks
+# ------------------------------------------------------------
+
+reference_gene <- "AAVS1"
+metadata_cols <- c("plate", "WellName", "Row", "Col", "Gene")
+
+loess_dataset <- as.data.frame(final_plate_list)
+
+missing_metadata <- setdiff(metadata_cols, names(loess_dataset))
+
+if (length(missing_metadata) > 0L) {
+    stop(
+        "Missing metadata columns: ",
+        paste(missing_metadata, collapse = ", ")
+    )
+}
+
+if (anyNA(loess_dataset$plate) || anyNA(loess_dataset$Gene)) {
+    stop("plate and Gene must not contain missing values.")
+}
+
+loess_dataset <- loess_dataset %>%
+    dplyr::filter(Gene != "Empty")
+
+if (nrow(loess_dataset) == 0L) {
+    stop("No wells remain after excluding Empty wells.")
+}
+
+if (!is.numeric(loess_dataset$Row) ||
+    !is.numeric(loess_dataset$Col)) {
+    stop("Row and Col must be numeric coordinates.")
+}
+
+variables_of_interest <- setdiff(
+    names(loess_dataset),
+    metadata_cols
+)
+
+if (length(variables_of_interest) == 0L) {
+    stop("No measurement columns were found.")
+}
+
+numeric_measurements <- vapply(
+    loess_dataset[variables_of_interest],
+    is.numeric,
+    logical(1)
+)
+
+if (!all(numeric_measurements)) {
+    stop(
+        "These measurement columns are not numeric: ",
+        paste(
+            variables_of_interest[!numeric_measurements],
+            collapse = ", "
+        )
+    )
+}
+
+if (!any(loess_dataset$Gene == reference_gene)) {
+    stop("No wells match reference_gene: ", reference_gene)
+}
+
+which_plate <- unique(loess_dataset$plate)
+
+# ------------------------------------------------------------
+# 1. LOESS correction separately for every plate and measurement
+#    Original row order is preserved, including missing values.
+# ------------------------------------------------------------
+
+df_loess_results <- loess_dataset
+
+for (plate_id in which_plate) {
+
+    plate_rows <- which(loess_dataset$plate == plate_id)
+    plate_data <- loess_dataset[plate_rows, , drop = FALSE]
+
+    for (temp_var in variables_of_interest) {
+
+        fit_data <- data.frame(
+            value = plate_data[[temp_var]],
+            Row = plate_data$Row,
+            Col = plate_data$Col
+        )
+
+        valid <- with(
+            fit_data,
+            is.finite(value) & is.finite(Row) & is.finite(Col)
+        )
+
+        corrected <- rep(NA_real_, nrow(plate_data))
+
+        # Sufficient rows do not guarantee a good spatial fit.
+        if (sum(valid) < 6L ||
+            length(unique(fit_data$Row[valid])) < 2L ||
+            length(unique(fit_data$Col[valid])) < 2L) {
+
+            warning(
+                "Insufficient spatial data for plate ", plate_id,
+                ", measurement ", temp_var,
+                "; corrected values set to NA."
+            )
+
+        } else {
+
+            fit <- stats::loess(
+                value ~ Row + Col,
+                data = fit_data[valid, , drop = FALSE],
+                span = 1,
+                degree = 1,
+                normalize = FALSE,
+                na.action = stats::na.fail
+            )
+
+            fitted_values <- as.numeric(fit$fitted)
+
+            if (any(!is.finite(fitted_values))) {
+                stop(
+                    "Non-finite LOESS fitted values for plate ", plate_id,
+                    ", measurement ", temp_var,
+                    ". Inspect the spatial fit."
+                )
+            }
+
+            # Remove the fitted spatial pattern while preserving its median.
+            corrected[valid] <- fit_data$value[valid] -
+                (fitted_values - stats::median(fitted_values))
+        }
+
+        df_loess_results[[temp_var]][plate_rows] <- corrected
+    }
+}
+
+# ------------------------------------------------------------
+# 2. Whole-plate z-scores on LOESS-corrected measurements
+#    These are retained for PCA.
+# ------------------------------------------------------------
+
+all_plate_z_scores <- df_loess_results
+z_score_cols <- paste0(variables_of_interest, "_z_score")
+
+# Prevent generated z-score names from overwriting existing columns.
+if (any(z_score_cols %in% names(df_loess_results))) {
+    stop("Generated z-score column names overlap existing input columns.")
+}
+
+for (i in seq_along(variables_of_interest)) {
+
+    temp_var <- variables_of_interest[i]
+    z_col <- z_score_cols[i]
+
+    all_plate_z_scores[[z_col]] <- NA_real_
+
+    for (plate_id in which_plate) {
+
+        plate_rows <- which(all_plate_z_scores$plate == plate_id)
+        x <- df_loess_results[[temp_var]][plate_rows]
+        valid <- is.finite(x)
+
+        z <- rep(NA_real_, length(x))
+
+        if (sum(valid) >= 2L) {
+
+            plate_mean <- mean(x[valid])
+            plate_sd <- stats::sd(x[valid])
+
+            if (is.finite(plate_mean) &&
+                is.finite(plate_sd) &&
+                plate_sd > 0) {
+                z[valid] <- (x[valid] - plate_mean) / plate_sd
+            }
+        }
+
+        all_plate_z_scores[[z_col]][plate_rows] <- z
+    }
+}
+
+# Exclude Gene and handle missing values before calling prcomp().
+z_scores_post_loess_only <- all_plate_z_scores %>%
+    dplyr::select(dplyr::all_of(z_score_cols), Gene)
+
+# ------------------------------------------------------------
+# 3. Glass's delta calculated from the z-scores
+#    One effect per gene, plate and measurement.
+# ------------------------------------------------------------
+
+z_long <- all_plate_z_scores %>%
+    dplyr::select(
+        dplyr::all_of(c("plate", "Gene", z_score_cols))
+    ) %>%
+    tidyr::pivot_longer(
+        cols = dplyr::all_of(z_score_cols),
+        names_to = ".measurement",
+        names_pattern = "^(.*)_z_score$",
+        values_to = ".score"
+    ) %>%
+    dplyr::transmute(
+        plate,
+        Gene,
+        variable = .measurement,
+        z_score = dplyr::if_else(
+            is.finite(.score),
+            .score,
+            NA_real_
+        )
+    )
+
+reference_stats <- z_long %>%
+    dplyr::filter(Gene == reference_gene) %>%
+    dplyr::group_by(plate, variable) %>%
+    dplyr::summarise(
+        n_reference = sum(!is.na(z_score)),
+        reference_mean = if (n_reference > 0L) {
+            mean(z_score, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        reference_sd = if (n_reference >= 2L) {
+            stats::sd(z_score, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        .groups = "drop"
+    )
+
+all_plate_effect_sizes <- z_long %>%
+    dplyr::group_by(plate, Gene, variable) %>%
+    dplyr::summarise(
+        n_wells = sum(!is.na(z_score)),
+        gene_mean = if (n_wells > 0L) {
+            mean(z_score, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        .groups = "drop"
+    ) %>%
+    dplyr::left_join(
+        reference_stats,
+        by = c("plate", "variable")
+    ) %>%
+    dplyr::mutate(
+        glass_delta = dplyr::if_else(
+            n_wells > 0L &
+                !is.na(n_reference) & n_reference >= 2L &
+                is.finite(gene_mean) &
+                is.finite(reference_mean) &
+                is.finite(reference_sd) & reference_sd > 0,
+            (gene_mean - reference_mean) / reference_sd,
+            NA_real_
+        )
+    )
+
+if (any(!is.finite(all_plate_effect_sizes$glass_delta))) {
+    warning(
+        "Some effects could not be calculated. Check n_wells, ",
+        "n_reference and reference_sd in all_plate_effect_sizes."
+    )
+}
+
+# ------------------------------------------------------------
+# 4. Create the missing plot_data object
+#    Retain one row per gene, plate and measurement.
+#    Calculate the mean effect across valid plates for each
+#    gene and measurement, giving each plate equal weight.
+# ------------------------------------------------------------
+
+plot_data <- all_plate_effect_sizes %>%
+    dplyr::rename(measurement = variable) %>%
+    dplyr::filter(is.finite(glass_delta)) %>%
+    dplyr::group_by(Gene, measurement) %>%
+    dplyr::mutate(
+        mean_effect = mean(glass_delta)
+    ) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(
+        Gene = factor(Gene)
+    )
+
+# Shared colour limits across all measurements.
+colour_limit <- if (nrow(plot_data) > 0L) {
+    max(abs(plot_data$mean_effect))
+} else {
+    1
+}
+
+if (!is.finite(colour_limit) || colour_limit == 0) {
+    colour_limit <- 1
+}
+
+# Alternatively, use fixed limits across future analyses:
+# colour_limit <- 3
+
+# ------------------------------------------------------------
+# 5. Plot every measurement, colouring each box by its mean effect
+#    Each point is one plate-level Glass's delta.
+# ------------------------------------------------------------
+
+for (selected_measurement in variables_of_interest) {
+
+    single_plot_data <- plot_data %>%
+        dplyr::filter(measurement == selected_measurement)
+
+    if (nrow(single_plot_data) == 0L) {
+        warning(
+            "No valid effects to plot for measurement: ",
+            selected_measurement
+        )
+        next
+    }
+
+    single_effect_plot <- ggplot2::ggplot(
+        single_plot_data,
+        ggplot2::aes(
+            x = Gene,
+            y = glass_delta,
+            group = Gene
+        )
+    ) +
+        ggplot2::geom_hline(
+            yintercept = 0,
+            colour = "grey70",
+            linetype = "dashed"
+        ) +
+        ggplot2::geom_boxplot(
+            ggplot2::aes(fill = mean_effect),
+            outlier.shape = NA
+        ) +
+        ggplot2::geom_point(
+            position = ggplot2::position_jitter(
+                width = 0.15,
+                height = 0,
+                seed = 1
+            ),
+            alpha = 0.6,
+            size = 1.5
+        ) +
+        ggplot2::scale_fill_gradient2(
+            low = "#2166AC",
+            mid = "white",
+            high = "#B2182B",
+            midpoint = 0,
+            limits = c(-colour_limit, colour_limit),
+            oob = scales::squish,
+            name = "Mean effect"
+        ) +
+        ggplot2::coord_flip() +
+        ggplot2::labs(
+            title = selected_measurement,
+            x = "Gene",
+            y = paste("Glass's delta vs", reference_gene)
+        ) +
+        ggplot2::theme_bw() +
+        ggplot2::theme(
+            axis.text.y = ggplot2::element_text(size = 10),
+            panel.grid.major.y = ggplot2::element_blank(),
+            panel.grid.minor = ggplot2::element_blank()
+        )
+
+    print(single_effect_plot)
+}
+```
+
+```{r pcapretty}
+
+# with the help of chatgpt
+
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+# ------------------------------------------------------------
+# Settings
+# ------------------------------------------------------------
+
+controls <- c("AAVS1", "IRS1", "PTEN", "POLA1", "NTC3")
+empty_labels <- c("empty")
+
+ellipse_level <- 0.20
+point_size <- 1.2
+point_alpha <- 0.5
+
+measurement_cols <- unique(variables_of_interest)
+z_cols <- paste0(measurement_cols, "_z_score")
+key_cols <- c("plate", "WellName", "Gene")
+
+# ------------------------------------------------------------
+# 1. Remove empty wells from both datasets
+# ------------------------------------------------------------
+
+is_empty_gene <- function(x) {
+  tolower(trimws(as.character(x))) %in%
+    tolower(trimws(empty_labels))
+}
+
+prepare_pca_data <- function(input_data, dataset_name) {
+
+  output <- as.data.frame(input_data)
+
+  if (!all(key_cols %in% names(output))) {
+    stop(dataset_name, " is missing required metadata columns.")
+  }
+
+  output[key_cols] <- lapply(
+    output[key_cols],
+    function(x) trimws(as.character(x))
+  )
+
+  empty_rows <- is_empty_gene(output$Gene)
+
+  message(
+    dataset_name, ": removing ", sum(empty_rows),
+    " empty-labelled wells."
+  )
+
+  output <- output[!empty_rows, , drop = FALSE]
+
+  if (anyNA(output[key_cols])) {
+    stop(dataset_name, " contains missing plate, WellName or Gene values.")
+  }
+
+  if (anyDuplicated(output[key_cols])) {
+    stop(
+      dataset_name,
+      ": plate + WellName + Gene must uniquely identify each well."
+    )
+  }
+
+  output
+}
+
+raw_data <- prepare_pca_data(final_plate_list, "Raw data")
+
+normalised_data <- prepare_pca_data(
+  all_plate_z_scores,
+  "Normalised data"
+)
+
+if (!all(measurement_cols %in% names(raw_data)) ||
+    !all(z_cols %in% names(normalised_data))) {
+  stop("Some expected measurement or z-score columns are missing.")
+}
+
+# ------------------------------------------------------------
+# 2. Match wells before and after normalisation
+# ------------------------------------------------------------
+
+raw_keys <- raw_data %>%
+  select(all_of(key_cols)) %>%
+  mutate(raw_row = row_number())
+
+normalised_keys <- normalised_data %>%
+  select(all_of(key_cols)) %>%
+  mutate(normalised_row = row_number())
+
+matched_wells <- inner_join(
+  raw_keys,
+  normalised_keys,
+  by = key_cols
+)
+
+if (nrow(matched_wells) == 0L) {
+  stop("No matching wells were found.")
+}
+
+convert_integer64 <- function(x) {
+  if (inherits(x, "integer64")) as.numeric(x) else x
+}
+
+raw_data[measurement_cols] <- lapply(
+  raw_data[measurement_cols],
+  convert_integer64
+)
+
+normalised_data[z_cols] <- lapply(
+  normalised_data[z_cols],
+  convert_integer64
+)
+
+before_matrix <- as.matrix(
+  raw_data[matched_wells$raw_row, measurement_cols, drop = FALSE]
+)
+
+after_matrix <- as.matrix(
+  normalised_data[matched_wells$normalised_row, z_cols, drop = FALSE]
+)
+
+colnames(after_matrix) <- measurement_cols
+
+if (!is.numeric(before_matrix) || !is.numeric(after_matrix)) {
+  stop("All PCA measurements must be numeric.")
+}
+
+# ------------------------------------------------------------
+# 3. Select common usable measurements and complete wells
+# ------------------------------------------------------------
+
+has_variation <- function(x) {
+  x <- x[is.finite(x)]
+  length(x) >= 2L && is.finite(sd(x)) && sd(x) > 0
+}
+
+keep_columns <- apply(before_matrix, 2, has_variation) &
+  apply(after_matrix, 2, has_variation)
+
+if (any(!keep_columns)) {
+  message(
+    "Excluded measurements: ",
+    paste(colnames(before_matrix)[!keep_columns], collapse = ", ")
+  )
+}
+
+before_matrix <- before_matrix[, keep_columns, drop = FALSE]
+after_matrix <- after_matrix[, keep_columns, drop = FALSE]
+
+if (ncol(before_matrix) < 2L) {
+  stop("At least two usable measurements are required.")
+}
+
+keep_rows <- rowSums(!is.finite(before_matrix)) == 0 &
+  rowSums(!is.finite(after_matrix)) == 0
+
+message(
+  "Excluding ", sum(!keep_rows),
+  " matched wells with missing/non-finite measurements."
+)
+
+before_matrix <- before_matrix[keep_rows, , drop = FALSE]
+after_matrix <- after_matrix[keep_rows, , drop = FALSE]
+
+pca_metadata <- matched_wells[keep_rows, , drop = FALSE] %>%
+  select(all_of(key_cols))
+
+if (nrow(pca_metadata) < 3L) {
+  stop("Too few complete matched wells remain.")
+}
+
+# Recheck variability after removing incomplete wells.
+keep_columns <- apply(before_matrix, 2, has_variation) &
+  apply(after_matrix, 2, has_variation)
+
+before_matrix <- before_matrix[, keep_columns, drop = FALSE]
+after_matrix <- after_matrix[, keep_columns, drop = FALSE]
+
+if (ncol(before_matrix) < 2L) {
+  stop("Too few variable measurements remain.")
+}
+
+stopifnot(
+  !any(is_empty_gene(pca_metadata$Gene)),
+  nrow(before_matrix) == nrow(pca_metadata),
+  nrow(after_matrix) == nrow(pca_metadata)
+)
+
+message(
+  "Final PCA inputs: ", nrow(pca_metadata), " wells, ",
+  ncol(before_matrix), " measurements, 0 empty-labelled wells."
+)
+
+# ------------------------------------------------------------
+# 4. Order plates numerically and create readable labels
+# ------------------------------------------------------------
+
+plate_levels <- unique(as.character(pca_metadata$plate))
+
+if (any(!grepl("^P[0-9]+", plate_levels))) {
+  stop("Plate names must start with P followed by a number.")
+}
+
+plate_numbers <- as.integer(
+  sub("^P([0-9]+).*", "\\1", plate_levels)
+)
+
+plate_order <- order(plate_numbers, plate_levels)
+plate_levels <- plate_levels[plate_order]
+plate_numbers <- plate_numbers[plate_order]
+
+if (anyDuplicated(plate_numbers)) {
+  stop("Multiple plate names have the same plate number; check plate labels.")
+}
+
+plate_labels <- paste("Plate", plate_numbers)
+
+# ------------------------------------------------------------
+# 5. Fit both PCAs and extract scores
+# ------------------------------------------------------------
+
+pca_before <- prcomp(before_matrix, center = TRUE, scale. = TRUE)
+pca_after <- prcomp(after_matrix, center = TRUE, scale. = TRUE)
+
+make_scores <- function(pca_object, metadata) {
+  metadata %>%
+    mutate(
+      PC1 = pca_object$x[, 1],
+      PC2 = pca_object$x[, 2]
+    )
+}
+
+before_scores <- make_scores(pca_before, pca_metadata)
+after_scores <- make_scores(pca_after, pca_metadata)
+
+axis_labels <- function(pca_object) {
+
+  variance_percent <- 100 * pca_object$sdev^2 /
+    sum(pca_object$sdev^2)
+
+  list(
+    x = sprintf("PC1 (%.1f%%)", variance_percent[1]),
+    y = sprintf("PC2 (%.1f%%)", variance_percent[2])
+  )
+}
+
+# ------------------------------------------------------------
+# 6. Shared axis limits
+# ------------------------------------------------------------
+
+padded_range <- function(x) {
+
+  limits <- range(x, na.rm = TRUE)
+  padding <- diff(limits) * 0.05
+
+  if (padding == 0) {
+    padding <- 1
+  }
+
+  limits + c(-padding, padding)
+}
+
+shared_x_limits <- padded_range(
+  c(before_scores$PC1, after_scores$PC1)
+)
+
+shared_y_limits <- padded_range(
+  c(before_scores$PC2, after_scores$PC2)
+)
+
+# Only retain groups suitable for fitting a 2D ellipse.
+get_ellipse_data <- function(scores, group_column) {
+
+  scores %>%
+    group_by(across(all_of(group_column))) %>%
+    filter(
+      n() >= 4L &&
+        qr(cbind(PC1 - mean(PC1), PC2 - mean(PC2)))$rank == 2L
+    ) %>%
+    ungroup()
+}
+
+# ------------------------------------------------------------
+# 7. Controls in colour, with control ellipses
+#    PCA is fitted to all retained genes; only controls highlighted.
+# ------------------------------------------------------------
+
+make_control_pca_plot <- function(scores, pca_object, plot_title) {
+
+  axes <- axis_labels(pca_object)
+
+  control_scores <- scores %>%
+    filter(Gene %in% controls)
+
+  control_ellipse_scores <- get_ellipse_data(
+    control_scores,
+    "Gene"
+  )
+
+  control_centres <- control_scores %>%
+    group_by(Gene) %>%
+    summarise(
+      PC1 = mean(PC1),
+      PC2 = mean(PC2),
+      .groups = "drop"
+    )
+
+  ggplot(scores, aes(PC1, PC2)) +
+    geom_point(
+      data = filter(scores, !(Gene %in% controls)),
+      colour = "grey70",
+      alpha = point_alpha,
+      size = point_size
+    ) +
+    stat_ellipse(
+      data = control_ellipse_scores,
+      aes(colour = Gene, group = Gene),
+      type = "norm",
+      level = ellipse_level,
+      linewidth = 0.8,
+      show.legend = FALSE
+    ) +
+    geom_point(
+      data = control_scores,
+      aes(colour = Gene),
+      alpha = point_alpha,
+      size = point_size
+    ) +
+    geom_label_repel(
+      data = control_centres,
+      aes(label = Gene, colour = Gene),
+      fill = "white",
+      seed = 1,
+      max.overlaps = Inf,
+      show.legend = FALSE
+    ) +
+    scale_colour_hue(
+      limits = controls,
+      drop = FALSE,
+      name = "Control"
+    ) +
+    labs(
+      title = plot_title,
+      subtitle = paste0(
+        "Empty wells excluded; ",
+        round(ellipse_level * 100),
+        "% control ellipses"
+      ),
+      x = axes$x,
+      y = axes$y
+    ) +
+    coord_equal(
+      xlim = shared_x_limits,
+      ylim = shared_y_limits,
+      expand = FALSE
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "right"
+    ) +
+    guides(
+      colour = guide_legend(
+        override.aes = list(alpha = 1, size = 3)
+      )
+    )
+}
+
+# ------------------------------------------------------------
+# 8. Plates in colour, with plate ellipses
+# ------------------------------------------------------------
+
+make_plate_pca_plot <- function(scores, pca_object, plot_title) {
+
+  axes <- axis_labels(pca_object)
+
+  scores <- scores %>%
+    mutate(plate = factor(plate, levels = plate_levels))
+
+  plate_ellipse_scores <- get_ellipse_data(scores, "plate")
+
+  ggplot(scores, aes(PC1, PC2, colour = plate)) +
+    stat_ellipse(
+      data = plate_ellipse_scores,
+      aes(group = plate),
+      type = "norm",
+      level = ellipse_level,
+      linewidth = 0.7,
+      show.legend = FALSE
+    ) +
+    geom_point(
+      alpha = point_alpha,
+      size = point_size
+    ) +
+    scale_colour_hue(
+      limits = plate_levels,
+      breaks = plate_levels,
+      labels = plate_labels,
+      drop = FALSE,
+      name = "Plate"
+    ) +
+    labs(
+      title = plot_title,
+      subtitle = paste0(
+        "Empty wells excluded; ",
+        round(ellipse_level * 100),
+        "% plate ellipses"
+      ),
+      x = axes$x,
+      y = axes$y
+    ) +
+    coord_equal(
+      xlim = shared_x_limits,
+      ylim = shared_y_limits,
+      expand = FALSE
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      legend.position = "right"
+    ) +
+    guides(
+      colour = guide_legend(
+        override.aes = list(alpha = 1, size = 3)
+      )
+    )
+}
+
+# ------------------------------------------------------------
+# 9. Rebuild and display all four plots
+# ------------------------------------------------------------
+
+pca_plot_before <- make_control_pca_plot(
+  before_scores, pca_before,
+  "Before plate normalisation — controls highlighted"
+)
+
+pca_plot_after <- make_control_pca_plot(
+  after_scores, pca_after,
+  "After plate normalisation — controls highlighted"
+)
+
+pca_plate_before <- make_plate_pca_plot(
+  before_scores, pca_before,
+  "Before plate normalisation — coloured by plate"
+)
+
+pca_plate_after <- make_plate_pca_plot(
+  after_scores, pca_after,
+  "After plate normalisation — coloured by plate"
+)
+
+print(pca_plot_before)
+print(pca_plot_after)
+print(pca_plate_before)
+print(pca_plate_after)
+```
+
+
+
+
+```{r top5genesglassdelta}
+
+# with the help of chatgpt
+
+
+library(dplyr)
+library(tidyr)
+
+# Choose: "absolute", "positive" or "negative".
+ranking_mode <- "positive"
+
+variables_to_rank <- c(
+    "Spots - Spot Area [px²] - Median per Well",
+    "Nuclei Selected Selected - Number of Objects",
+    "Cytoplasm selected - Lipid_droplets Area [µm²] - Median per Well",
+    "Cytoplasm selected - Cell Ratio Width to Length - Median per Well",
+    "Total_mt - Total_mt Area [µm²] - Median per Well"
+)
+
+if (length(ranking_mode) != 1L ||
+    !ranking_mode %in% c("absolute", "positive", "negative")) {
+    stop("ranking_mode must be absolute, positive or negative.")
+}
+
+effect_data <- as.data.frame(all_plate_effect_sizes)
+
+# Support different column naming conventions.
+if (!"gene" %in% names(effect_data) &&
+    "Gene" %in% names(effect_data)) {
+    effect_data <- effect_data %>%
+        rename(gene = Gene)
+}
+
+if (!"measurement" %in% names(effect_data) &&
+    "variable" %in% names(effect_data)) {
+    effect_data <- effect_data %>%
+        rename(measurement = variable)
+}
+
+required_cols <- c("plate", "gene", "measurement", "glass_delta")
+
+if (!all(required_cols %in% names(effect_data))) {
+    stop("Expected columns: plate, gene, measurement and glass_delta.")
+}
+
+missing_variables <- setdiff(
+    variables_to_rank,
+    unique(effect_data$measurement)
+)
+
+if (length(missing_variables) > 0L) {
+    stop(
+        "These measurement names were not found; check their spelling: ",
+        paste(missing_variables, collapse = ", ")
+    )
+}
+
+# Expect one Glass's delta per gene, plate and measurement.
+if (anyDuplicated(effect_data[c("plate", "gene", "measurement")])) {
+    stop("Multiple effects found for the same gene, plate and measurement.")
+}
+
+ranked_genes <- effect_data %>%
+    filter(
+        measurement %in% variables_to_rank,
+        !is.na(gene),
+        !is.na(plate),
+        is.finite(glass_delta)
+    ) %>%
+    mutate(gene = as.character(gene)) %>%
+    group_by(measurement, gene) %>%
+    summarise(
+        median_glass_delta = median(glass_delta),
+        .groups = "drop"
+    ) %>%
+    mutate(
+        ranking_score = case_when(
+            ranking_mode == "absolute" ~ abs(median_glass_delta),
+            ranking_mode == "positive" ~ median_glass_delta,
+            ranking_mode == "negative" ~ -median_glass_delta
+        )
+    ) %>%
+    group_by(measurement) %>%
+    arrange(desc(ranking_score), gene, .by_group = TRUE) %>%
+    slice_head(n = 5L) %>%
+    mutate(Rank = row_number()) %>%
+    ungroup() %>%
+    select(Rank, measurement, gene)
+
+# Return five ranking rows, with one column per measurement.
+# NA indicates fewer than five genes with valid effects.
+top_5_genes_glass_delta <- tidyr::expand_grid(
+    Rank = 1:5,
+    measurement = variables_to_rank
+) %>%
+    left_join(ranked_genes, by = c("Rank", "measurement")) %>%
+    pivot_wider(
+        names_from = measurement,
+        values_from = gene
+    ) %>%
+    arrange(Rank) %>%
+    select(Rank, all_of(variables_to_rank))
+
+top_5_genes_glass_delta
+
+# "Spots - Spot Area [px²] - Median per Well", "Nuclei Selected Selected - Number of Objects" "Cytoplasm selected - Lipid_droplets Area [µm²] - Median per Well"  "Cytoplasm selected - Cell Ratio Width to Length - Median per Well"   "Total_mt - Total_mt Area [µm²] - Median per Well"          
+
+write.csv(top_5_genes_glass_delta, "top_5_genes_glass_delta.csv")
+
+
+```

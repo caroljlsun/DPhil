@@ -1,0 +1,862 @@
+---
+title: "pilot_screen_exploration"
+author: "CZJS"
+date: "2025-02-18"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/screening/")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+```
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(bit64)
+library(NbClust)
+library(pheatmap)
+library(umap)
+library(platetools)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+
+```
+
+```{r functions}
+source("catHeader.R")
+
+
+investigate_raw_maps <- function(to_plot, request){
+    request <- eval(request)
+    request <- quo_name(enquo(request))
+    
+    raw_map(data = to_plot[[request]], 
+            well = to_plot$well, 
+            plate = 96) + labs(title = request)
+}
+
+
+investigate_b_maps <- function(to_plot, request){
+    request <- eval(request)
+    request <- quo_name(enquo(request))
+    
+    b_map(data = to_plot[[request]], 
+          well = to_plot$well, 
+          plate = 96) + labs(title = request)
+}
+
+```
+
+## Importing data
+
+```{r import}
+# the plate map
+
+pilot_map <- fread("gene_key_main_pilot.csv") %>% 
+    dplyr::rename(gene = cmpdname)
+
+
+# the plates
+plate_1 <- fread("PlateResults_plate1.txt", skip = 1) %>% 
+    mutate(well = paste0(LETTERS[Row], sprintf("%02d", Column))) %>% 
+    filter(!Row %in% c(1, 8) & !Column %in% c(1, 12)) %>%  # removing the 1st outer edge because it is empty
+    merge(., pilot_map, by = "well")
+
+
+plate_2 <- fread("PlateResults_plate2.txt", skip = 1) %>% 
+    mutate(well = paste0(LETTERS[Row], sprintf("%02d", Column))) %>% 
+    merge(., pilot_map, by = "well")
+
+plate_3 <- fread("PlateResults_plate3.txt", skip = 1) %>% 
+    mutate(well = paste0(LETTERS[Row], sprintf("%02d", Column))) %>% 
+    merge(., pilot_map, by = "well")
+
+
+```
+
+```{r}
+raw_map(data = plate_1$spot_intensity, 
+        well = plate_1$well, 
+        plate = 96)
+
+raw_map(data = plate_2$spot_intensity, 
+        well = plate_2$well, 
+        plate = 96)
+
+raw_map(data = plate_3$spot_intensity, 
+        well = plate_3$well, 
+        plate = 96)
+
+```
+
+### Feature breakdown, raw values, plate 1 {.tabset .tabset-pills}
+
+For a better picture of the data distribution, instead of just counts.
+
+```{r rawbreakdown, results='asis', echo=FALSE}
+
+pltting_list <- colnames(plate_1) #get list of variables to plot
+
+pltting_list <-  pltting_list[! pltting_list %in% c("Row", "Column", "well", "gene")] #remove cluster and eid from list of names
+
+plot_compile <- list() #start an empty list for storing the plots
+
+for (i in seq_along(pltting_list)) { # loop across the list of variables to plot
+    
+    name <- paste0(pltting_list[i]) #make names for each plot
+    plot_compile[[name]] <- investigate_raw_maps(to_plot = plate_1, #store in each unique name this following ggplot
+                                                 request = pltting_list[i])
+    
+}
+
+for (j in seq_along(plot_compile)) { # loop across list of plots
+    
+    tmp <- plot_compile[[j]] # store temporarily each ggplot
+    
+    catHeader(pltting_list[j], 4) #for tabs. comment out to see all at once
+    
+    print(tmp) #print each ggplot
+    
+}
+
+```
+
+### Feature breakdown, b-values, plate 1 {.tabset .tabset-pills}
+
+```{r Bbreakdown, results='asis', echo=FALSE}
+
+pltting_list <- colnames(plate_1) #get list of variables to plot
+
+pltting_list <-  pltting_list[! pltting_list %in% c("Row", "Column", "well", "gene")] #remove cluster and eid from list of names
+
+plot_compile <- list() #start an empty list for storing the plots
+
+for (i in seq_along(pltting_list)) { # loop across the list of variables to plot
+    
+    name <- paste0(pltting_list[i]) #make names for each plot
+    plot_compile[[name]] <- investigate_b_maps(to_plot = plate_1, #store in each unique name this following ggplot
+                                               request = pltting_list[i])
+    
+}
+
+for (j in seq_along(plot_compile)) { # loop across list of plots
+    
+    tmp <- plot_compile[[j]] # store temporarily each ggplot
+    
+    catHeader(pltting_list[j], 4) #for tabs. comment out to see all at once
+    
+    print(tmp) #print each ggplot
+    
+}
+
+```
+
+### Various platetool function tests
+
+```{r}
+
+# bhit_map(data = plate_1$lipid_intensity,
+#         well = plate_1$well, 
+#         plate = 96)
+
+```
+
+```{r pcabigplate}
+
+### merge all plates into one
+big_plate <- rbindlist(list(plate_1, plate_2, plate_3), idcol = "plate") %>%
+    as.data.frame() %>% 
+    relocate(gene, .after = Column) 
+
+
+big_plate_pca_plot_data <-  big_plate %>%   filter(gene != "NTC2")
+
+#write_csv(big_plate, "pre_screen_data_raw.csv")
+
+### scale etc. 
+
+rownames(big_plate_pca_plot_data) <- make.names(big_plate_pca_plot_data$gene, unique = T)
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_big_plate <- subset(big_plate_pca_plot_data, select = -c(plate, Row, Column, well, gene))
+
+scaled_big_plate <- scale(numeric_big_plate)
+
+pca_bp <- princomp(scaled_big_plate)
+
+summary(pca_bp)
+
+fviz_eig(pca_bp)
+
+
+fviz_pca_var(pca_bp,axes = c(1,2), col.var = "black")+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_biplot(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+### habillage
+
+#gene_groupings <- 
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2",
+             habillage = big_plate_pca_plot_data$plate, addEllipses = T, ellipse.level = 0.95) +
+    theme_minimal()
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2",
+             habillage = big_plate_pca_plot_data$gene) +
+    theme_minimal() # merge the NTCS into one before habillage
+
+```
+
+```{r corrs}
+bp_cor <- cor(numeric_big_plate, use = "complete.obs")
+
+heatmaply_cor(x = bp_cor,
+              fontsize_row = 7,
+              fontsize_col = 7,
+              colors = viridis(200, option = "magma",),
+              #colors = "RdYlBu",
+              hide_colorbar = TRUE
+)
+```
+
+```{r pheatmap}
+
+pheatmap(scaled_big_plate, angle_col = 45, fontsize = 5)
+
+
+```
+
+
+```{r medianpheatmap}
+
+med_plate <- big_plate %>% 
+    dplyr::select(-c(Row, Column, well, plate)) %>% 
+    group_by(gene) %>%
+    summarise(across(everything(), ~median(.x, na.rm = T))) %>% 
+    as.data.frame()
+
+rownames(med_plate) <- make.names(med_plate$gene, unique = T)
+
+numeric_med_plate <- subset(med_plate, select = -c(gene))
+
+scaled_med_plate <- scale(numeric_med_plate)
+
+pheatmap(scaled_med_plate, angle_col = 45, fontsize = 10)
+
+
+```
+
+```{r bsmootheverything}
+
+# fill the plate bc rows are not matching
+
+
+fill_p1 <- fill_plate(plate_1, "well", plate = 96)
+fill_p2 <- fill_plate(plate_2, "well", plate = 96)
+fill_p3 <- fill_plate(plate_3, "well", plate = 96)
+
+
+filled_big_plate <- rbindlist(list(fill_p1, fill_p2, fill_p3), idcol = "plate") %>%
+    as.data.frame()
+
+
+# Define the columns you want to apply the b_score function to
+columns_to_score <- c(colnames(filled_big_plate[,5:16]))
+
+# Apply the b_score function to each column using lapply
+b_scored_list <- lapply(columns_to_score, function(column) {
+    b_score(data = filled_big_plate[[column]], 
+            well = filled_big_plate$well, 
+            plate_id = filled_big_plate$plate,
+            plate = 96, 
+            normalise = T )# this divides by median absolute deviation
+})
+
+
+# Combine the results back into the dataframe
+names(b_scored_list) <- columns_to_score
+b_scored_df <- as.data.frame(b_scored_list) %>% 
+    select(-matches("\\.well$")) %>% 
+    select(-matches("\\.plate_id$"))
+
+# Add the well column back to the dataframe
+b_scored_df$well <- filled_big_plate$well
+b_scored_df$gene <- filled_big_plate$gene
+
+# Quick visual check
+raw_map(data = b_scored_df$nuclei_count.residual[1:96], well = b_scored_df$well[1:96], plate = 96)
+# nuclei count are still very janky...
+
+
+# Display the first few rows to check the result
+head(b_scored_df)
+
+
+rownames(b_scored_df) <- make.names(b_scored_df$gene, unique = T)
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_b_scored_plate <- subset(b_scored_df, select = -c(well, gene)) %>% na.omit()
+
+scaled_b_scored_plate <- scale(numeric_b_scored_plate)
+
+pca_b_scored <- princomp(scaled_b_scored_plate)
+
+summary(pca_b_scored)
+
+fviz_eig(pca_b_scored)
+
+
+fviz_pca_var(pca_b_scored,axes = c(1,2), col.var = "black")+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_b_scored, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_b_scored, axes = c(1,2), col.ind = "cos2", habillage = big_plate$plate, addEllipses = T, ellipse.level = 0.95) +
+    theme_minimal()
+
+
+big_plate_NTC <- big_plate %>% 
+    mutate(gene_or_NTC = if_else(str_detect(gene,"NTC"),
+                                 str_replace(gene, "\\d+", ""),
+                                 gene))
+
+
+
+
+fviz_pca_ind(pca_b_scored, axes = c(1,2), col.ind = "cos2",
+             habillage = big_plate_NTC$gene_or_NTC,
+             addEllipses = T, ellipse.level = 0.05, 
+             label = "none") +
+    theme_minimal()
+
+
+```
+
+```{r umaps}
+
+b_scored_umap <- umap(scaled_b_scored_plate)
+
+b_score_layout <- b_scored_umap$layout %>% 
+    as.data.frame()
+
+b_score_plot_data <- cbind(b_score_layout, rownames(scaled_b_scored_plate))
+
+fig <- plot_ly(b_score_plot_data, x = ~V1, y = ~V2,
+               color = ~big_plate_NTC$gene_or_NTC,
+               type = 'scatter', mode = 'markers',
+               marker = list(size = 20))%>%  
+    layout(
+        plot_bgcolor = "white",
+        legend=list(title=list(text='features')), 
+        xaxis = list( 
+            title = "0"),  
+        yaxis = list( 
+            title = "1")) 
+
+
+fig
+
+```
+
+## Jaccard Similarity Index
+
+```{r jaccard_similarity, results='asis', echo=FALSE}
+
+# Function to calculate Jaccard similarity index
+jaccard_similarity <- function(x, y) {
+    intersection <- length(intersect(x, y))
+    union <- length(union(x, y))
+    return(intersection / union)
+}
+
+# Calculate Jaccard similarity index for each pair of genes
+genes <- unique(big_plate$gene)
+jaccard_matrix <- matrix(0, nrow = length(genes), ncol = length(genes))
+rownames(jaccard_matrix) <- genes
+colnames(jaccard_matrix) <- genes
+
+for (i in 1:length(genes)) {
+    for (j in 1:length(genes)) {
+        gene_i <- big_plate[big_plate$gene == genes[i], ]
+        gene_j <- big_plate[big_plate$gene == genes[j], ]
+        jaccard_matrix[i, j] <- jaccard_similarity(gene_i$well, gene_j$well)
+    }
+}
+
+# Visualize the Jaccard similarity index using a heatmap
+heatmaply::heatmaply(jaccard_matrix, 
+                     main = "Jaccard Similarity Index",
+                     xlab = "Genes", 
+                     ylab = "Genes",
+                     colors = viridis::viridis(200, option = "magma"))
+
+install.packages("vegan")
+library(vegan)
+a <- c(1,5,8,10,22,14,15,16,2,7)
+b <- c(10,12,13,2,7,9,2,7,23,15)
+df<-data.frame(a,b)
+jacjac <- vegdist(b_scored_df[,-c(13,14)], method = "jaccard", na.rm = TRUE)
+
+
+# need to wrangle data into format of:
+# data(varespec)
+
+# genes as columns
+# observations in rows
+# averages per observation...
+```
+
+
+TD:
+
+-   Try using raw_grid
+-   Merge across plates, take the median, apply scaling and normalisation
+-   Merge as one giant dataframe and do the same
+-   Merge by all replicates across all plates, and do the same.
+-   PCA, elbow plot, with var and ind
+-   Pheatmap
+-   UMAP
+-   Calculate power to detect real differences
+- Plot centroids in PCAs
+
+### Edge effects
+
+```{r effectsizes}
+
+### merge all plates into one
+big_plate <- rbindlist(list(plate_1, plate_2, plate_3), idcol = "plate") %>%
+    as.data.frame() %>% 
+    relocate(gene, .after = Column)
+
+# make some additional ratios of interest
+
+big_plate_additional_factors <- big_plate %>% 
+    mutate(mt_per_cell = mitotracker_intensity_mean/nuclei_count,
+           spots_per_cell = spot_count/nuclei_count, 
+           spot_area_per_cell = spot_area/nuclei_count,
+           spot_area_per_cell_area = spot_area/cell_area) %>% 
+    filter(gene != "NTC2") %>% 
+    mutate(gene = str_replace(gene, "^NTC[0-9]+$", "NTC"))
+
+# calculate effect sizes for just nuclei count first
+
+
+mean_NTC_p1 <- mean(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+mean_NTC_p2 <- mean(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 2 & str_detect(big_plate_additional_factors$gene, "NTC")])
+mean_NTC_p3 <- mean(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 3 & str_detect(big_plate_additional_factors$gene, "NTC")])
+
+stdev_p1 <- sd(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 1 ])
+stdev_p2 <- sd(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 2 ])
+stdev_p3 <- sd(big_plate_additional_factors$nuclei_count[big_plate_additional_factors$plate == 3 ])
+
+
+
+big_plate_effect_sizes <- big_plate_additional_factors %>% 
+    mutate(
+        nuclei_count_z_score = case_when(
+            plate == 1 ~ ((nuclei_count-mean_NTC_p1)/stdev_p1),
+            plate == 2 ~ ((nuclei_count-mean_NTC_p2)/stdev_p2),
+            plate == 3 ~ ((nuclei_count-mean_NTC_p3)/stdev_p3)),
+        sigma_z_score =  sd(nuclei_count_z_score[str_detect(gene, "NTC")]),
+        nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+    )
+
+ggplot(big_plate_effect_sizes, mapping = aes(x = gene, y = nuclei_count_effect_size)) + 
+    geom_boxplot()
+
+ggplot(big_plate_effect_sizes, mapping = aes(x = gene, y = nuclei_count)) + 
+    geom_boxplot()
+
+### try to iterate the effect calculations
+variables_of_interest <- setdiff(colnames(big_plate_additional_factors), c("plate","well","Row","Column","gene"))[1]
+#variables_of_interest <- c("mt_per_cell", "spots_per_cell", "spot_area_per_cell", "spot_area_per_cell_area", "cell_area")[3]
+
+
+mean_NTC_p1 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+mean_NTC_p2 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 2 & str_detect(big_plate_additional_factors$gene, "NTC")])
+mean_NTC_p3 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 3 & str_detect(big_plate_additional_factors$gene, "NTC")])
+
+
+stdev_p1 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 ])
+stdev_p2 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 2 ])
+stdev_p3 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 3 ])
+
+
+
+big_plate_effect_sizes <- big_plate_additional_factors %>% 
+    mutate(
+        nuclei_count_z_score = case_when(
+            plate == 1 ~ ((.data[[variables_of_interest]]-mean_NTC_p1)/stdev_p1),
+            plate == 2 ~ ((.data[[variables_of_interest]]-mean_NTC_p2)/stdev_p2),
+            plate == 3 ~ ((.data[[variables_of_interest]]-mean_NTC_p3)/stdev_p3)),
+        sigma_z_score =  sd(nuclei_count_z_score[str_detect(gene, "NTC")]),
+        nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+    )
+
+big_plate_effect_sizes <- big_plate_additional_factors %>%
+    mutate(
+        z_score_col := case_when(
+            plate == 1 ~ (.data[[variables_of_interest]] - mean_NTC_p1) / stdev_p1,
+            plate == 2 ~ (.data[[variables_of_interest]] - mean_NTC_p2) / stdev_p2,
+            plate == 3 ~ (.data[[variables_of_interest]] - mean_NTC_p3) / stdev_p3
+        )
+    )
+
+# Calculate sigma_z_score using the new z-score column
+sigma_z_score <- sd(big_plate_effect_sizes$z_score_col[str_detect(big_plate_effect_sizes$gene, "NTC")])
+
+# Add effect size column
+big_plate_effect_sizes <- big_plate_effect_sizes %>%
+    mutate(
+        effect_size = z_score_col/sigma_z_score
+    )
+
+ggplot(big_plate_effect_sizes, mapping = aes(x = gene, y = effect_size)) + 
+    geom_boxplot()+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    theme_minimal()+
+    ggtitle(paste0(variables_of_interest, " effect size"))
+
+
+
+ggplot(big_plate %>% filter(gene %in% c("PTEN", "IRS1", "NTC1", "NTC3", "NTC4", "NTC5")), mapping = aes(x = gene, y = cell_width_to_length, colour = gene)) + 
+    geom_violin(trim = FALSE, show.legend = FALSE)+
+    geom_point(width = 0.2, show.legend = FALSE)+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    theme_minimal()+
+    scale_colour_manual(values = c("orange", "grey", "grey", "grey", "grey", "purple"))+
+    labs(title = "Cell width to length", x = "Gene Knockdown", y = "Cell width to length")
+### calculations for excel sheet on power
+
+variables_of_interest <- c("mt_per_cell", "spots_per_cell", "spot_area_per_cell", "spot_area_per_cell_area", "cell_area")[1]
+variables_of_interest <- c(colnames(big_plate_additional_factors))[15]
+
+
+# the ntcs
+# mean_NTC_power <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+# stdev_NTC_power <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+
+mean_NTC_power <- mean(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "NTC")])
+stdev_NTC_power <- sd(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "NTC")])
+
+#the genes
+# mean_IRS1_power <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "IRS1")])
+# stdev_IRS1_power <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "IRS1")])
+
+mean_IRS1_power <- mean(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "IRS1")])
+stdev_IRS1_power <- sd(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "IRS1")])
+
+mean_gene_power <- mean(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "IRS1")])
+stdev_gene_power <- sd(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "IRS1")])
+
+mean_NTC_power
+stdev_NTC_power
+mean_IRS1_power
+stdev_IRS1_power
+mean_gene_power
+stdev_gene_power
+
+```
+
+### Power calculations iteration function
+```{r powercalcfunc}
+
+no_NTCs <- 12
+
+no_genes <- 9
+
+pooled_sd <- sqrt( (((no_NTCs - 1)*(stdev_NTC_power^2)) + ((no_genes - 1)*(stdev_gene_power^2)))/(no_NTCs+no_genes-2))
+
+no_control_wells <- 36
+
+no_wells_compound <- 3
+
+power_equiv <- (qnorm(0.8) + qnorm(0.95))*(pooled_sd * sqrt((1/no_control_wells) + (1/no_wells_compound)))/abs(mean_NTC_power - mean_gene_power)
+
+variables_of_interest <- c(colnames(big_plate_additional_factors))[15]
+gene_of_interest <- c(unique(big_plate_additional_factors$gene))[16] # c("IRS1", "PTEN")
+
+
+
+
+
+### turn into function
+
+
+PowerCalc <- function(variables_of_interest, gene_of_interest, no_control_wells, no_wells_compound, no_NTCs, no_genes){
+    
+    # NTC mean and stdev across all plates
+    mean_NTC_power <- mean(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "NTC")])
+    stdev_NTC_power <- sd(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, "NTC")])
+    
+
+    # gene mean and stdev across all plates
+    mean_gene_power <- mean(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, gene_of_interest)])
+    stdev_gene_power <- sd(big_plate_additional_factors[[variables_of_interest]][str_detect(big_plate_additional_factors$gene, gene_of_interest)])
+    
+    #pooled sd
+    pooled_sd <- sqrt( (((no_NTCs - 1)*(stdev_NTC_power^2)) + ((no_genes - 1)*(stdev_gene_power^2)))/(no_NTCs+no_genes-2))
+    
+    #final power calc
+    power_equiv <- (qnorm(0.8) + qnorm(0.95))*(pooled_sd * sqrt((1/no_control_wells) + (1/no_wells_compound)))/abs(mean_NTC_power - mean_gene_power)
+    
+    # print answer
+    print(power_equiv)
+
+}
+
+PowerCalc(variables_of_interest, gene_of_interest, no_control_wells, no_wells_compound, no_NTCs, no_genes)
+
+PowerCalc(variables_of_interest, gene_of_interest, no_control_wells = 54, no_wells_compound = 6, no_NTCs, no_genes)
+
+
+### turn into iterative function
+
+variables_of_interest <- c(colnames(big_plate_additional_factors))[11]
+genes_of_interest <- c(unique(big_plate_additional_factors$gene)) # c("IRS1", "PTEN")
+results <- vector("list", length(genes_of_interest))
+
+for (i in seq_along(genes_of_interest)) {
+    
+    temp_gene <- genes_of_interest[i]
+    
+    temp_power <- PowerCalc(variables_of_interest, temp_gene, no_control_wells = 84, no_wells_compound = 9, no_NTCs, no_genes)
+    
+    # Add to list
+    
+    results[[i]] <- list(gene = temp_gene, power = temp_power)
+
+}
+
+power_dataframe <- bind_rows(results)
+
+ggplot(power_dataframe, mapping = aes(x = gene, y = power))+
+    geom_point()+
+    geom_hline(yintercept = 0.3, linetype = 2)+
+    theme_minimal()+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    labs(title = paste0("Power calculations for ", variables_of_interest),
+        subtitle = "For n = 9")+
+    ylim(0,1)
+
+
+```
+### Centroids
+
+```{r centroids}
+
+pca_dims <- pca_bp$scores[,c("Comp.1", "Comp.2")] %>%
+    as_tibble() %>% 
+    bind_cols()# check that the row order is the same!
+
+
+
+```
+
+
+### Effect sizes iteration
+```{r iteration}
+
+variables_of_interest <- setdiff(colnames(big_plate_additional_factors), c("plate","well","Row","Column","gene"))
+
+for (temp_var in variables_of_interest) {
+    
+    
+    mean_NTC_p1 <- mean(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+    mean_NTC_p2 <- mean(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 2 & str_detect(big_plate_additional_factors$gene, "NTC")])
+    mean_NTC_p3 <- mean(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 3 & str_detect(big_plate_additional_factors$gene, "NTC")])
+    
+    
+    stdev_p1 <- sd(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 1 ])
+    stdev_p2 <- sd(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 2 ])
+    stdev_p3 <- sd(big_plate_additional_factors[[temp_var]][big_plate_additional_factors$plate == 3 ])
+    
+    
+    
+    big_plate_effect_sizes <- big_plate_additional_factors %>% 
+        mutate(
+            nuclei_count_z_score = case_when(
+                plate == 1 ~ ((.data[[temp_var]]-mean_NTC_p1)/stdev_p1),
+                plate == 2 ~ ((.data[[temp_var]]-mean_NTC_p2)/stdev_p2),
+                plate == 3 ~ ((.data[[temp_var]]-mean_NTC_p3)/stdev_p3)),
+            sigma_z_score =  sd(nuclei_count_z_score[str_detect(gene, "NTC")]),
+            nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+        )
+    
+    big_plate_effect_sizes <- big_plate_additional_factors %>%
+        mutate(
+            z_score_col = case_when(
+                plate == 1 ~ (.data[[temp_var]] - mean_NTC_p1) / stdev_p1,
+                plate == 2 ~ (.data[[temp_var]] - mean_NTC_p2) / stdev_p2,
+                plate == 3 ~ (.data[[temp_var]] - mean_NTC_p3) / stdev_p3
+            )
+        )
+    
+    # Calculate sigma_z_score using the new z-score column
+    sigma_z_score <- sd(big_plate_effect_sizes$z_score_col[str_detect(big_plate_effect_sizes$gene, "NTC")])
+    
+    # Add effect size column
+    big_plate_effect_sizes <- big_plate_effect_sizes %>%
+        mutate(
+            effect_size = z_score_col/sigma_z_score
+        )
+    
+    ggplot(big_plate_effect_sizes, mapping = aes(x = gene, y = effect_size)) + 
+        geom_boxplot()+
+        scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+        theme_minimal()+
+        ggtitle(paste0(temp_var, " effect size")) -> p
+    
+    print(p)
+    
+    
+    
+}
+
+
+
+```
+
+```{r pcaedgeeffects}
+
+pca_data <- as.data.frame(pca_bp$scores) %>% 
+    mutate(gene = str_remove(row.names(.), "\\..*$")) 
+
+rownames(pca_data) <- NULL
+
+### column bind the pca data onto the big plate data since the row order should remain the same then continue with the rest of the analysis
+# 
+# 
+# variables_of_interest <- "Comp.1"
+# 
+# mean_NTC_p1 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 & str_detect(big_plate_additional_factors$gene, "NTC")])
+# mean_NTC_p2 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 2 & str_detect(big_plate_additional_factors$gene, "NTC")])
+# mean_NTC_p3 <- mean(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 3 & str_detect(big_plate_additional_factors$gene, "NTC")])
+# 
+# 
+# stdev_p1 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 1 ])
+# stdev_p2 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 2 ])
+# stdev_p3 <- sd(big_plate_additional_factors[[variables_of_interest]][big_plate_additional_factors$plate == 3 ])
+# 
+# 
+# 
+# big_plate_effect_sizes <- big_plate_additional_factors %>% 
+#     mutate(
+#         nuclei_count_z_score = case_when(
+#             plate == 1 ~ ((.data[[variables_of_interest]]-mean_NTC_p1)/stdev_p1),
+#             plate == 2 ~ ((.data[[variables_of_interest]]-mean_NTC_p2)/stdev_p2),
+#             plate == 3 ~ ((.data[[variables_of_interest]]-mean_NTC_p3)/stdev_p3)),
+#         sigma_z_score =  sd(nuclei_count_z_score[str_detect(gene, "NTC")]),
+#         nuclei_count_effect_size = (nuclei_count_z_score/sigma_z_score)
+#     )
+# 
+# big_plate_effect_sizes <- big_plate_additional_factors %>%
+#     mutate(
+#         z_score_col := case_when(
+#             plate == 1 ~ (.data[[variables_of_interest]] - mean_NTC_p1) / stdev_p1,
+#             plate == 2 ~ (.data[[variables_of_interest]] - mean_NTC_p2) / stdev_p2,
+#             plate == 3 ~ (.data[[variables_of_interest]] - mean_NTC_p3) / stdev_p3
+#         )
+#     )
+# 
+# # Calculate sigma_z_score using the new z-score column
+# sigma_z_score <- sd(big_plate_effect_sizes$z_score_col[str_detect(big_plate_effect_sizes$gene, "NTC")])
+# 
+# # Add effect size column
+# big_plate_effect_sizes <- big_plate_effect_sizes %>%
+#     mutate(
+#         effect_size = z_score_col/sigma_z_score
+#     )
+# 
+# ggplot(big_plate_effect_sizes, mapping = aes(x = gene, y = effect_size)) + 
+#     geom_boxplot()+
+#     scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+#     theme_minimal()+
+#     ggtitle(paste0(variables_of_interest, " effect size"))
+# 
+# 
+
+
+```
+
+```{r factorial}
+
+# facet wrap
+
+# List of columns to plot
+y_columns <- setdiff(colnames(big_plate), c("plate","well","Row","Column","gene"))
+
+# Pivot to long format
+long_df <- big_plate %>%
+    filter(gene %in% c("PTEN", "IRS1", "NTC1", "NTC3", "NTC4", "NTC5")) %>%
+    pivot_longer(
+        cols = all_of(y_columns),
+        names_to = "measurement",
+        values_to = "value"
+    )
+
+# Plot with facet_wrap for each measurement
+ggplot(long_df, aes(x = gene, y = value)) +
+    geom_boxplot() +
+    scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    facet_wrap(~ measurement, scales = "free_y") +
+    theme_minimal()
+
+
+ggplot(long_df, aes(x = gene, y = value)) +
+    geom_violin(trim = FALSE)+
+    geom_point(width = 0.2)+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2)) +
+    facet_wrap(~ measurement, scales = "free_y") +
+    theme_minimal()
+
+```
+
+
+
+
+```{r asca}
+
+
+library(multiblock)
+
+```

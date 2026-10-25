@@ -1,0 +1,758 @@
+---
+title: "Unified_plate_maps"
+author: "CZJS"
+date: "2026-07-23"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/main_screen/")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+
+
+```
+
+
+```{r customplateplot}
+
+custom_plate_plot <- function (data, position, value, label, plate_size = 96, plate_type = "square", 
+                               colour, limits, title, title_size, show_legend = TRUE, legend_n_row, 
+                               label_size, silent = TRUE, scale) 
+{
+    
+    if (!plate_size %in% c(6, 12, 24, 48, 96, 384, 1536)) {
+        stop("Selected plate_size not available!")
+    }
+    if (missing(scale)) {
+        scale <- min((graphics::par("fin")[1]/5.572917), (graphics::par("fin")[2]/3.177083))
+    }
+    if (!silent) {
+        message(paste0("width: ", round(graphics::par("fin")[1], 
+                                        digits = 3), " height: ", round(graphics::par("fin")[2], 
+                                                                        digits = 3)))
+        message(paste0("scaling factor: ", round(scale, digits = 3)))
+    }
+    data <- tidyr::drop_na(data, {
+        {
+            value
+        }
+    })
+    if (missing(limits)) {
+        min_val <- min(dplyr::pull(data, {
+            {
+                value
+            }
+        }))
+        max_val <- max(dplyr::pull(data, {
+            {
+                value
+            }
+        }))
+        n_distinct_values <- length(unique(dplyr::pull(data, 
+                                                       {
+                                                           {
+                                                               value
+                                                           }
+                                                       })))
+        if (n_distinct_values == 1 & is.numeric(min_val)) {
+            max_val <- min_val + abs(min_val)
+        }
+    }
+    else {
+        min_val <- ifelse(is.na(limits[1]), min(dplyr::pull(data, 
+                                                            {
+                                                                {
+                                                                    value
+                                                                }
+                                                            })), limits[1])
+        max_val <- ifelse(is.na(limits[2]), max(dplyr::pull(data, 
+                                                            {
+                                                                {
+                                                                    value
+                                                                }
+                                                            })), limits[2])
+    }
+    if (is.numeric(dplyr::pull(data, {
+        {
+            value
+        }
+    }))) {
+        if (missing(colour)) {
+            viridis_colours <- "placeholder"
+            utils::data("viridis_colours", envir = environment())
+            fill_colours <- viridis_colours
+            colfunc <- scales::gradient_n_pal(viridis_colours, 
+                                              values = c(min_val, max_val))
+            data_colours <- colfunc(dplyr::pull(data, {
+                {
+                    value
+                }
+            }))
+        }
+        else {
+            fill_colours <- colour
+            colfunc <- scales::gradient_n_pal(colour, values = c(min_val, 
+                                                                 max_val))
+            data_colours <- colfunc(dplyr::pull(data, {
+                {
+                    value
+                }
+            }))
+        }
+    }
+    if (!is.numeric(dplyr::pull(data, {
+        {
+            value
+        }
+    }))) {
+        if (missing(colour)) {
+            protti_colours <- "placeholder"
+            utils::data("protti_colours", envir = environment())
+            fill_colours <- protti_colours
+            data_colours <- purrr::map_chr(dplyr::pull(data, 
+                                                       {
+                                                           {
+                                                               value
+                                                           }
+                                                       }), .f = ~{
+                                                           fill_colours[which(.x == unique(dplyr::pull(data, 
+                                                                                                       {
+                                                                                                           {
+                                                                                                               value
+                                                                                                           }
+                                                                                                       })))]
+                                                       })
+        }
+        else {
+            if (length(colour) < length(unique(dplyr::pull(data, 
+                                                           {
+                                                               {
+                                                                   value
+                                                               }
+                                                           })))) {
+                stop("There are more categories in the \"value\" column than provided colours. Please add more colours to the \"colour\" argument!")
+            }
+            fill_colours <- colour
+            data_colours <- purrr::map_chr(dplyr::pull(data, 
+                                                       {
+                                                           {
+                                                               value
+                                                           }
+                                                       }), .f = ~{
+                                                           fill_colours[which(.x == unique(dplyr::pull(data, 
+                                                                                                       {
+                                                                                                           {
+                                                                                                               value
+                                                                                                           }
+                                                                                                       })))]
+                                                       })
+        }
+    }
+    if (!missing(label)) {
+        hcl <- farver::decode_colour(data_colours, "rgb", "hcl")
+        label_col <- ifelse(hcl[, "l"] > 50, "#000000", "#FFFFFF")
+    }
+    else {
+        label_col <- ""
+    }
+    max_label_length <- max(nchar(unique(dplyr::pull(dplyr::ungroup(data), 
+                                                     {
+                                                         {
+                                                             value
+                                                         }
+                                                     }))))
+    MORELETTERS <- c(LETTERS, "AA", "AB", "AC", "AD", "AE", 
+                     "AF")
+    data_prep <- dplyr::mutate(dplyr::ungroup(data), row = stringr::str_extract({
+        {
+            position
+        }
+    }, pattern = "[:upper:]+"), col = as.numeric(stringr::str_extract({
+        {
+            position
+        }
+    }, pattern = "\\d+")), row_num = as.numeric(match(.data$row, 
+                                                      MORELETTERS)), colours = data_colours, label_colours = label_col)
+    if (!is.numeric(dplyr::pull(data, {
+        {
+            value
+        }
+    }))) {
+        data_prep <- dplyr::mutate(data_prep, `:=`({
+            {
+                value
+            }
+        }, forcats::fct_inorder({
+            {
+                value
+            }
+        })))
+    }
+    if (show_legend) {
+        label_is_numeric <- is.numeric(dplyr::pull(data_prep, 
+                                                   {
+                                                       {
+                                                           value
+                                                       }
+                                                   }))
+    }
+    else {
+        label_is_numeric <- TRUE
+    }
+    if (plate_size == 6) {
+        n_cols <- 3
+        n_rows <- 2
+        size <- 33 * scale
+        min_x_axis <- 0.6
+        max_x_axis <- n_cols + 0.4
+        min_y_axis <- 0.53
+        max_y_axis <- n_rows + 0.46
+        text_size <- 18 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 18 * scale
+        legend_size <- 10 * scale
+        stroke_width <- 0.8 * scale
+        if (show_legend) {
+            size <- (33 - max(c(((max_label_length - 3) * ifelse(max_label_length < 
+                                                                     20, ifelse(max_label_length < 13, 0.7, (1.03 - 
+                                                                                                                 max_label_length/40)), 0.55)), 0))) * scale
+            legend_text_size <- max((18 - max(c(((max_label_length - 
+                                                      3) * 0.5), 0))), 10) * scale
+            legend_title_size <- max((18 - max(c(((max_label_length - 
+                                                       3) * 0.5), 0))), 10) * scale
+            legend_size <- max((10 - max(c(((max_label_length - 
+                                                 3) * 0.3), 0))), 5) * scale
+        }
+    }
+    if (plate_size == 12) {
+        n_cols <- 4
+        n_rows <- 3
+        size <- 22 * scale
+        min_x_axis <- 0.6
+        max_x_axis <- n_cols + 0.37
+        min_y_axis <- 0.6
+        max_y_axis <- n_rows + 0.4
+        text_size <- 16 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 16 * scale
+        legend_size <- size
+        stroke_width <- 0.8 * scale
+        if (show_legend) {
+            size <- (22 - max((max_label_length - 11) * ifelse(max_label_length < 
+                                                                   16, (0.65 - max_label_length/30), (0.15 * ((max_label_length/16 * 
+                                                                                                                   2) - 0.8))), 0)) * scale
+            legend_text_size <- max((16 - max(c(((max_label_length - 
+                                                      3) * 0.5), 0))), 10) * scale
+            legend_title_size <- max((16 - max(c(((max_label_length - 
+                                                       3) * 0.5), 0))), 10) * scale
+            legend_size <- max((10 - max(c(((max_label_length - 
+                                                 3) * 0.3), 0))), 5) * scale
+        }
+    }
+    if (plate_size == 24) {
+        n_cols <- 6
+        n_rows <- 4
+        size <- 17 * scale
+        min_x_axis <- 0.7
+        max_x_axis <- n_cols + 0.27
+        min_y_axis <- 0.65
+        max_y_axis <- n_rows + 0.34
+        text_size <- 12 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 16 * scale
+        legend_size <- size
+        stroke_width <- 0.8 * scale
+        if (show_legend) {
+            size <- (15 - max((max_label_length - 8) * 0.3, 
+                              0)) * scale
+            legend_text_size <- max((12 - max(c(((max_label_length - 
+                                                      3) * 0.5), 0))), 10) * scale
+            legend_title_size <- max((12 - max(c(((max_label_length - 
+                                                       3) * 0.5), 0))), 10) * scale
+            legend_size <- max((8 - max(c(((max_label_length - 
+                                                3) * 0.3), 0))), 5) * scale
+        }
+    }
+    if (plate_size == 48) {
+        n_cols <- 8
+        n_rows <- 6
+        size <- 11.4 * scale
+        min_x_axis <- 0.7
+        max_x_axis <- n_cols + 0.18
+        min_y_axis <- 0.68
+        max_y_axis <- n_rows + 0.26
+        text_size <- 10 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 14 * scale
+        legend_size <- size
+        stroke_width <- 0.8 * scale
+        if (show_legend) {
+            size <- (11.4 - max((max_label_length - 14) * 0.3, 
+                                0)) * scale
+            legend_size <- 5 * scale
+        }
+    }
+    if (plate_size == 96) {
+        n_cols <- 12
+        n_rows <- 8
+        size <- 9.5 * scale
+        min_x_axis <- 0.75
+        max_x_axis <- n_cols + 0.25
+        min_y_axis <- 0.75
+        max_y_axis <- n_rows + 0.25
+        text_size <- 8 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 12 * scale
+        legend_size <- size
+        stroke_width <- 0 * scale
+        if (show_legend) {
+            size <- (9.5 - max((max_label_length - 9) * 0.15, 
+                               0)) * scale
+            legend_size <- 5 * scale
+        }
+    }
+    if (plate_size == 384) {
+        n_cols <- 24
+        n_rows <- 16
+        size <- 4.6 * scale
+        min_x_axis <- 0.95
+        max_x_axis <- n_cols
+        min_y_axis <- 0.9
+        max_y_axis <- n_rows
+        text_size <- 6 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 10 * scale
+        legend_size <- size
+        stroke_width <- 0.6 * scale
+        if (show_legend) {
+            size <- (4.4 - max((max_label_length - 13) * 0.07, 
+                               0)) * scale
+        }
+    }
+    if (plate_size == 1536) {
+        n_cols <- 48
+        n_rows <- 32
+        size <- 1.8 * scale
+        min_x_axis <- 0.95
+        max_x_axis <- n_cols
+        min_y_axis <- 0.9
+        max_y_axis <- n_rows
+        text_size <- 4 * scale
+        legend_text_size <- text_size
+        legend_title_size <- text_size
+        title_size_preset <- 10 * scale
+        legend_size <- size
+        stroke_width <- 0.3 * scale
+        if (show_legend) {
+            size <- (2.2 - max((max_label_length - 13) * 0.07, 
+                               0)) * scale
+        }
+    }
+    data_prep <- dplyr::mutate(data_prep, row_num = abs(.data$row_num - 
+                                                            (n_rows + 1)))
+    if (missing(label_size)) {
+        label_size_scaled <- size/3
+    }
+    else {
+        label_size_scaled <- label_size * scale
+    }
+    if (missing(title_size)) {
+        title_size <- title_size_preset
+    }
+    else {
+        title_size <- title_size * scale
+    }
+    plate_layout <- expand.grid(columns = seq(1, n_cols), rows = seq(1, 
+                                                                     n_rows))
+    if (plate_type == "round") {
+        shape <- 21
+    }
+    if (plate_type == "square") {
+        shape <- 22
+    }
+    if (!missing(title)) {
+        plot_title <- title
+    }
+    else {
+        plot_title <- paste0(plate_size, "-well Plate Layout")
+    }
+    plot <- ggplot2::ggplot(data_prep, ggplot2::aes(x = col, 
+                                                    y = .data$row_num)) + ggplot2::geom_point(data = plate_layout, 
+                                                                                              ggplot2::aes(x = .data$columns, y = .data$rows), color = "grey90", 
+                                                                                              size = size, shape = shape) + ggplot2::geom_point(ggplot2::aes(fill = {
+                                                                                                  {
+                                                                                                      value
+                                                                                                  }
+                                                                                              }), size = size, shape = shape, stroke = stroke_width) + 
+        ggplot2::coord_fixed(ratio = ((n_cols + 1)/n_cols)/((n_rows + 
+                                                                 1)/n_rows), xlim = c(min_x_axis, max_x_axis), ylim = c(min_y_axis, 
+                                                                                                                        max_y_axis)) + ggplot2::scale_y_continuous(breaks = seq(1, 
+                                                                                                                                                                                n_rows), labels = rev(MORELETTERS[1:n_rows])) + ggplot2::scale_x_continuous(breaks = seq(1, 
+                                                                                                                                                                                                                                                                         n_cols), position = "top") + {
+                                                                                                                                                                                                                                                                             if (is.numeric(dplyr::pull(data, {
+                                                                                                                                                                                                                                                                                 {
+                                                                                                                                                                                                                                                                                     value
+                                                                                                                                                                                                                                                                                 }
+                                                                                                                                                                                                                                                                             }))) {
+                                                                                                                                                                                                                                                                                 ggplot2::scale_fill_gradientn(colors = fill_colours, 
+                                                                                                                                                                                                                                                                                                               limits = c(min_val, max_val), guide = ggplot2::guide_colorbar(ticks.linewidth = max(0.5 * 
+                                                                                                                                                                                                                                                                                                                                                                                                       scale, 0.2)))
+                                                                                                                                                                                                                                                                             }
+                                                                                                                                                                                                                                                                         } + {
+                                                                                                                                                                                                                                                                             if (!is.numeric(dplyr::pull(data, {
+                                                                                                                                                                                                                                                                                 {
+                                                                                                                                                                                                                                                                                     value
+                                                                                                                                                                                                                                                                                 }
+                                                                                                                                                                                                                                                                             }))) 
+                                                                                                                                                                                                                                                                                 ggplot2::scale_fill_manual(values = fill_colours)
+                                                                                                                                                                                                                                                                         } + ggplot2::labs(title = plot_title, x = "", y = "") + 
+        {
+            if (!missing(label)) 
+                ggplot2::geom_text(ggplot2::aes(x = col, y = .data$row_num, 
+                                                label = format({
+                                                    {
+                                                        label
+                                                    }
+                                                }, drop0Trailing = FALSE, justify = "none", 
+                                                trim = TRUE)), colour = data_prep$label_colours, 
+                                   size = label_size_scaled)
+        } + ggplot2::theme_bw() + {
+            if (!show_legend) {
+                ggplot2::theme(legend.position = "none")
+            }
+        } + {
+            if (!label_is_numeric) {
+                if (!missing(legend_n_row)) {
+                    ggplot2::guides(fill = ggplot2::guide_legend(override.aes = list(size = legend_size), 
+                                                                 nrow = legend_n_row))
+                }
+                else {
+                    ggplot2::guides(fill = ggplot2::guide_legend(override.aes = list(size = legend_size)))
+                }
+            }
+        } + {
+            if (label_is_numeric) {
+                ggplot2::theme(legend.key.size = ggplot2::unit(max(0.25 * 
+                                                                       scale, 0.2), "in"))
+            }
+        } + ggplot2::theme(panel.grid.major = ggplot2::element_blank(), 
+                           panel.grid.minor = ggplot2::element_blank(), axis.text = ggplot2::element_text(size = text_size, 
+                                                                                                          face = "bold"), axis.ticks.x = ggplot2::element_blank(), 
+                           axis.ticks.y = ggplot2::element_blank(), legend.text = ggplot2::element_text(size = legend_text_size), 
+                           legend.title = ggplot2::element_text(size = legend_title_size), 
+                           plot.title = ggplot2::element_text(size = title_size), 
+                           axis.title.x = ggplot2::element_blank(), panel.border = ggplot2::element_rect(linewidth = stroke_width))
+    
+    
+    list(plot, fill_colours, data_colours)
+}
+
+
+```
+
+Loading libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(Hmisc)
+library(bit64)
+library(pheatmap)
+library(umap)
+library(platetools)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+
+library(ggplate)
+
+
+```
+
+
+
+```{r plate1}
+
+
+quad_gene_key <- fread("Quad rearrangements.txt")
+
+quad_gene_key$Well <- str_replace_all(quad_gene_key$Well,"0(?=\\d)", "")
+
+# Create a 96-well plot with labels
+original_quad_plot <- custom_plate_plot(
+    data = quad_gene_key,
+    position = Well,
+    value = Original,
+    #label = Stamp1,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = F,
+    label_size = 1.3,
+    colour = rainbow(n = 96, s=1, v=0.7, alpha = 0.5), scale = 2 
+)
+
+
+
+constant_colours <- original_quad_plot[[3]]
+
+
+names(constant_colours) <- quad_gene_key$Original
+table(constant_colours)
+
+### turning controls grey?
+
+constant_colours["AAVS1"] <- "#E6E6E6"
+constant_colours["PTEN"] <- "#E6E6E6"
+constant_colours["POLA1"] <- "#E6E6E6"
+constant_colours["NTC3"] <- "#E6E6E6"
+constant_colours["IRS1"] <- "#E6E6E6"
+
+
+
+
+original_quad_plot[[1]]
+
+
+stamp_quad_plot <- custom_plate_plot(
+    data = quad_gene_key,
+    position = Well,
+    value = Original,
+    #label = Stamp1,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = F,
+    label_size = 1.3,
+    colour = constant_colours, scale = 2 
+)
+
+
+stamp_quad_plot[[1]]
+
+# save as main_plate_layout_stamp2 as pdf 8x8 inches
+
+```
+
+
+
+```{r platenegativecontrols}
+
+negatives <- fread("negative_controls_genekey.txt")
+
+
+# Create a 96-well plot with labels
+negatives_quad_plot <- custom_plate_plot(
+    data = negatives,
+    position = Well,
+    value = Genes,
+    #label = Genes,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = T,
+    label_size = 1.3,
+    colour = magma(n=5,  alpha = 0.5, begin = 0.2),
+    scale = 1.65
+)
+
+
+negatives_quad_plot[[1]]
+
+
+```
+
+
+
+```{r platepositivecontrols}
+
+#library(ggguides)
+
+positives <- fread("positive_control_genekey.txt")
+
+
+ordering_colours <- rainbow(n = 20, s=1, v=0.7, alpha = 0.5) 
+
+positives_new_order <- as_data_frame(positives$Genes)
+
+positives_new_order$new_order <-  str_sort(positives_new_order$value)
+
+
+colour_keys <- unique(positives_new_order$new_order) %>% as_data_frame()
+colour_keys$colours <- ordering_colours
+
+positives_new_order_final <- left_join(positives_new_order, colour_keys, by = join_by(new_order == value))
+
+
+colouring_key <- positives_new_order_final$colours
+names(colouring_key) <- positives_new_order_final$new_order
+
+
+# Create a 96-well plot with labels
+positives_quad_plot <- custom_plate_plot(
+    data = positives,
+    position = Well,
+    value = Genes,
+    #label = Genes,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = F,
+    #legend_n_row = 10,
+    label_size = 1.3,
+    colour = colouring_key,
+    scale = 2
+    #scale = 1.4
+    #list_order = c("APPB2","COL5A3","IRS1","L3MBTL3","LGALS3BP","LIFR","LMO3","NTC1","NTC2","NTC3","NTC4","NTC5","PAPOLA","PDZK1IP1","PLEKHA1","POLA1","PPARG","PRDM16","PTEN","TRIP10")
+)
+
+
+positives_quad_plot[[1]]
+
+
+```
+
+
+```{r plateuniformities}
+
+before_automation <- fread("before_automation_nuclei_count.txt")
+
+# Create a 96-well plot with labels
+before_automation_plot <- custom_plate_plot(
+    data = before_automation,
+    position = WellName,
+    value = Average,
+    #label = Genes,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = T,
+    #legend_n_row = 10,
+    label_size = 1.3,
+    colour = magma(n=96,  alpha = 0.5, begin = 0.2),
+    scale = 2,
+    limits = c(600, 1600)
+    
+)
+
+
+before_automation_plot[[1]]
+
+#96well_before_auto_legend_900x600
+
+
+after_automation <- fread("automation_nuclei_count.txt")
+
+
+# Create a 96-well plot with labels
+after_automation_plot <- custom_plate_plot(
+    data = after_automation,
+    position = WellName,
+    value = Nuclei,
+    #label = Genes,
+    plate_size = 96,
+    plate_type = "round",
+    show_legend = T,
+    #legend_n_row = 10,
+    label_size = 1.3,
+    colour = magma(n=96,  alpha = 0.5, begin = 0.2),
+    scale = 2,
+    limits = c(600, 1600)
+    
+    
+)
+
+
+after_automation_plot[[1]]
+
+
+
+
+#96well_after_auto_legend_900x600
+
+
+```
+
+
+
+```{r uniformitycalculations}
+
+###before automation
+
+data_all <- before_automation %>% 
+    dplyr::mutate(row = str_extract(WellName, "[A-Za-z]+")) %>% 
+    dplyr::mutate(column = str_extract(WellName, "[0-9]+")) %>% 
+    dplyr::mutate(column = as.numeric(column)) %>% 
+    dplyr::mutate(position = ifelse(row %in% c("A", "H") | column %in% c(1, 12), "edge", "non-edge"))
+
+Log2_nuclei_means <- data_all %>% 
+    group_by(data_all$position) %>% 
+    summarise(m = mean(Average))
+
+data_all %>% 
+    ggplot(aes(x=Average, fill=position, colour=position)) +
+    geom_density(alpha = 0.3) +
+    geom_vline(xintercept = data_all[position =="edge", mean(Average, na.rm = T)], color = "red", linetype = "dashed")+
+    geom_vline(xintercept = data_all[position =="non-edge", mean(Average, na.rm = T)], color = "blue", linetype = "dashed")+
+    labs(title = "Plate uniformity", x = "Nuclei count", y = "Density")+
+    xlim(0,1700)+
+    theme_minimal()
+
+data_all %>% 
+    ggplot(aes(y= Average,x = position, colour=position)) +
+    geom_boxplot()+
+    stat_compare_means(method = "t.test", comparisons = list(c("edge", "non-edge")), bracket.size = 0.3, label.y = 1200)+
+    theme_minimal()
+
+
+###after automation
+
+data_all <- after_automation %>% 
+    dplyr::mutate(row = str_extract(WellName, "[A-Za-z]+")) %>% 
+    dplyr::mutate(column = str_extract(WellName, "[0-9]+")) %>% 
+    dplyr::mutate(column = as.numeric(column)) %>% 
+    dplyr::mutate(position = ifelse(row %in% c("A", "H") | column %in% c(1, 12), "edge", "non-edge"))
+
+Log2_nuclei_means <- data_all %>% 
+    group_by(data_all$position) %>% 
+    summarise(m = mean(Nuclei))
+
+data_all %>% 
+    ggplot(aes(x=Nuclei, fill=position, colour=position)) +
+    geom_density(alpha = 0.3) +
+    geom_vline(xintercept = data_all[position =="edge", mean(Nuclei, na.rm = T)], color = "red", linetype = "dashed")+
+    geom_vline(xintercept = data_all[position =="non-edge", mean(Nuclei, na.rm = T)], color = "blue", linetype = "dashed")+
+    labs(title = "Plate uniformity using automation", x = "Nuclei count", y = "Density")+
+    xlim(0,1700)+
+    theme_minimal()
+
+library(ggpubr)
+
+data_all %>% 
+    ggplot(aes(y=Nuclei,x = position, colour=position)) +
+    geom_boxplot()+
+    stat_compare_means(method = "t.test", comparisons = list(c("edge", "non-edge")), bracket.size = 0.3, label.y = 1700)+
+    theme_minimal()
+
+#### NEXT: figure out how to make some boxplots of this and do a t-test 
+
+```

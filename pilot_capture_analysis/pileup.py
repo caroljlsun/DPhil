@@ -1,0 +1,232 @@
+import pandas as pd
+import numpy as np
+import cooler
+from typing import Literal
+from capcruncher.utils import is_valid_bed
+from loguru import logger
+import pyranges as pr
+
+class CoolerBedGraph:
+    """Generates a bedgraph file from a cooler file created by interactions-store.
+
+    Attributes:
+     cooler (cooler.Cooler): Cooler file to use for bedgraph production
+     capture_name (str): Name of capture probe being processed.
+     sparse (bool): Only output bins with interactions.
+     only_cis (bool): Only output cis interactions.
+
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        sparse: bool = True,
+        only_cis: bool = False,
+        region_to_limit: str = None,
+    ):
+        """
+        Args:
+            uri (str): Path to cooler group in hdf5 file.
+            sparse (bool, optional): Only output non-zero bins. Defaults to True.
+        """
+        self._sparse = sparse
+        self._only_cis = only_cis
+
+        logger.info(f"Reading {uri}")
+        self._cooler = cooler.Cooler(uri)
+        self.viewpoint_name = self._cooler.info["metadata"]["viewpoint_name"]
+        self._viewpoint_bins = self._cooler.info["metadata"]["viewpoint_bins"]
+
+        if len(self._viewpoint_bins) > 1:
+            self.multiple_viewpoint_bins = True
+            logger.warning(
+                f"Viewpoint {self.viewpoint_name} has multiple bins! {self._viewpoint_bins}. Proceed with caution!"
+            )
+        else:
+            self.multiple_viewpoint_bins = False
+
+        self.viewpoint_chroms = self._cooler.info["metadata"]["viewpoint_chrom"]
+        self.n_cis_interactions = self._cooler.info["metadata"]["n_cis_interactions"]
+        logger.info(f"Processing {self.viewpoint_name}")
+
+        if only_cis:
+            pixels = []
+            bins = []
+            for chrom in self.viewpoint_chroms:
+                _bins = self._cooler.bins().fetch(chrom)
+                viewpoint_chrom_bins = self._bins["name"]
+                _pixels = (
+                    self._cooler.pixels()
+                    .fetch(self.viewpoint_chroms)
+                    .query(
+                        "(bin1_id in @viewpoint_chrom_bins) and (bin2_id in @viewpoint_chrom_bins)"
+                    )
+                )
+                _bins = self._cooler.bins().fetch(chrom)
+
+                pixels.append(_pixels)
+                bins.append(_bins)
+
+            self._pixels = pd.concat(pixels)
+            self._bins = pd.concat(bins)
+
+        elif region_to_limit:
+            self._pixels = self._cooler.pixels().fetch(region_to_limit)
+            self._bins = self._cooler.bins().fetch(region_to_limit)
+
+        else:
+            self._pixels = self._cooler.pixels()[:]
+            # TODO: Avoid this if possible as reading all bins into memory
+            self._bins = self._cooler.bins()[:]
+
+        # Ensure name column is present
+        self._bins = (
+            self._bins.assign(name=lambda df: df.index)
+            if "name" not in self._bins.columns
+            else self._bins
+        )
+        self._reporters = None
+
+    def _get_reporters(self):
+        logger.info("Extracting reporters")
+        concat_ids = pd.concat([self._pixels["bin1_id"], self._pixels["bin2_id"]])
+        concat_ids_filt = concat_ids.loc[lambda ser: ser.isin(self._viewpoint_bins)]
+        pixels = self._pixels.loc[concat_ids_filt.index]
+
+        df_interactions = pd.DataFrame()
+        df_interactions["capture"] = np.where(
+            pixels["bin1_id"].isin(self._viewpoint_bins),
+            pixels["bin1_id"],
+            pixels["bin2_id"],
+        )
+
+        df_interactions["reporter"] = np.where(
+            pixels["bin1_id"].isin(self._viewpoint_bins),
+            pixels["bin2_id"],
+            pixels["bin1_id"],
+        )
+
+        df_interactions["count"] = pixels["count"].values
+
+        return df_interactions.sort_values(["capture", "reporter"]).reset_index(
+            drop=True
+        )
+
+    def extract_bedgraph(
+        self, normalisation: Literal["raw", "n_cis", "region"] = "raw", **norm_kwargs
+    ) -> pd.DataFrame:
+        logger.info("Generating bedgraph")
+        df_bdg = (
+            self._bins.merge(
+                self.reporters,
+                left_on="name",
+                right_on="reporter",
+                how="inner" if self._sparse else "outer",
+            )[["chrom", "start", "end", "count"]]
+            .assign(count=lambda df: df["count"].fillna(0))
+            .sort_values(["chrom", "start"])
+        )
+
+        # TODO: This is a hack to deal with multiple bins for a viewpoint
+        if self.multiple_viewpoint_bins:
+            gr_bdg = pr.PyRanges(
+                df_bdg.rename(
+                    columns={"chrom": "Chromosome", "start": "Start", "end": "End"}
+                )
+            )
+
+            df_bdg = (
+                gr_bdg.cluster()
+                .df.groupby("Cluster")
+                .agg(
+                    {
+                        "count": "sum",
+                        "Start": "min",
+                        "End": "max",
+                        "Chromosome": "first",
+                    }
+                )
+                .reset_index()
+                .rename(
+                    columns={"Start": "start", "End": "end", "Chromosome": "chrom"}
+                )[["chrom", "start", "end", "count"]]
+            )
+
+        if not normalisation == "raw":
+            logger.info("Normalising bedgraph")
+            self._normalise_bedgraph(df_bdg, method=normalisation, **norm_kwargs)
+
+        return df_bdg
+
+    @property
+    def reporters(self) -> pd.DataFrame:
+        """Interactions with capture fragments/bins.
+
+        Returns:
+         pd.DataFrame: DataFrame containing just bins interacting with the capture probe.
+        """
+
+        if self._reporters is not None:
+            return self._reporters
+        else:
+            self._reporters = self._get_reporters()
+            return self._reporters
+
+    def _normalise_bedgraph(
+        self, bedgraph, scale_factor=1e6, method: str = "n_cis", region: str = None
+    ) -> pd.DataFrame:
+        """Normalises the bedgraph (in place).
+
+        Uses the number of cis interactions to normalise the bedgraph counts.
+
+        Args:
+         scale_factor (int, optional): Scaling factor for normalisation. Defaults to 1e6.
+
+        Returns:
+         pd.DataFrame: Normalised bedgraph formatted DataFrame
+        """
+
+        if method == "raw":
+            pass
+        elif method == "n_cis":
+            self._normalise_by_n_cis(bedgraph, scale_factor)
+        elif method == "region":
+            self._normalise_by_regions(bedgraph, scale_factor, region)
+
+    def _normalise_by_n_cis(self, bedgraph, scale_factor: float):
+        bedgraph["count"] = (bedgraph["count"] / self.n_cis_interactions) * scale_factor
+
+    def _normalise_by_regions(self, bedgraph, scale_factor: float, regions: str):
+        if not is_valid_bed(regions):
+            raise ValueError(
+                "A valid bed file is required for region based normalisation"
+            )
+
+        df_viewpoint_norm_regions = pd.read_csv(
+            regions, sep="\t", names=["chrom", "start", "end", "name"]
+        )
+        df_viewpoint_norm_regions = df_viewpoint_norm_regions.loc[
+            lambda df: df["name"].str.contains(self.viewpoint_name)
+        ]
+
+        counts_in_regions = []
+        for region in df_viewpoint_norm_regions.itertuples():
+            counts_in_regions.append(
+                bedgraph.query(
+                    "(chrom == @region.chrom) and (start >= @region.start) and (start <= @region.end)"
+                )
+            )
+
+        df_counts_in_regions = pd.concat(counts_in_regions)
+        total_counts_in_region = df_counts_in_regions["count"].sum()
+
+        bedgraph["count"] = (bedgraph["count"] / total_counts_in_region) * scale_factor
+
+    def to_pyranges(
+        self, normalisation: Literal["raw", "n_cis", "region"] = "raw", **norm_kwargs
+    ):
+        return pr.PyRanges(
+            self.extract_bedgraph(
+                normalisation=normalisation, norm_kwargs=norm_kwargs
+            ).rename(columns={"chrom": "Chromosome", "start": "Start", "end": "End"})
+        )

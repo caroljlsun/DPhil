@@ -1,0 +1,1296 @@
+---
+title: "AAVS1_screen_reanalysed"
+author: "CZJS"
+date: "2026-08-10"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/screening/")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+
+# Functions defined here
+# copied from https://rdrr.io/bioc/imageHTS/man/zprime.html
+
+zprime = function(a, b, method=c('mahalanobis', 'robust', 'fixsd', 'original')) {
+    method = match.arg(method)
+    
+    if (method=='mahalanobis') {
+        if (is.null(dim(a))) a = matrix(a, ncol=1)
+        if (is.null(dim(b))) b = matrix(b, ncol=1)
+        mua = apply(a, 2, mean)
+        mub = apply(b, 2, mean)
+        dm = try(mahalanobis(mua, mub, cov(a) + cov(b)))
+        if (class(dm)=='try-error') NA
+        else 1-3/sqrt(dm)
+    }
+    else {
+        if (method=='robust') 1-3*(mad(a)+mad(b))/abs(median(a)-median(b))
+        else if (method=='fixsd') 1-3*sqrt(var(a)+var(b))/abs(mean(a)-mean(b))
+        else 1-3*(sd(a)+sd(b))/abs(mean(a)-mean(b))
+    }
+}
+
+
+investigate_raw_maps <- function(to_plot, request){
+    request <- eval(request)
+    request <- quo_name(enquo(request))
+    
+    raw_map(data = to_plot[[request]], 
+            well = to_plot$well, 
+            plate = 96) + labs(title = request)
+}
+
+#source("../screening/catHeader.R")
+
+```
+
+
+Loading libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(bit64)
+library(NbClust)
+library(pheatmap)
+library(umap)
+library(platetools)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+library(ggpubr)
+
+```
+
+Load and clean data
+
+
+```{r import}
+# the plate map
+
+
+pilot_map <- fread("AAVS1_experiment_genekey.csv") %>% 
+    dplyr::rename(gene = cmpdname)
+
+
+# the plates
+plate_1 <- fread("AAVS1_imaging_output.txt", skip = 1) %>% 
+    mutate(well = paste0(LETTERS[Row], sprintf("%02d", Column))) %>% 
+    filter(!Row %in% c(1, 8) & !Column %in% c(1, 12)) %>%  # removing the 1st outer edge because it is empty
+    merge(., pilot_map, by = "well")
+
+
+
+final_plate_list <- plate_1
+
+
+
+```
+
+
+
+Quick PCA, no special normalisation
+
+
+```{r pcageneric}
+
+
+pca_plot_data <-  final_plate_list# %>%  filter(gene != "ZFP62")
+
+
+rownames(pca_plot_data) <- make.names(pca_plot_data$gene, unique = T)
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_plate <- subset(pca_plot_data, select = -c( Row, Column, well, gene)) %>% 
+    mutate_if(is.integer64, as.numeric)
+
+scaled_plate <- scale(numeric_plate)
+
+pca_bp <- princomp(scaled_plate)
+
+summary(pca_bp)
+
+fviz_eig(pca_bp)
+
+
+fviz_pca_var(pca_bp,axes = c(1,2), col.var = "black", repel = T)+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_biplot(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+### habillage
+
+pca_plot <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                         habillage = pca_plot_data$gene, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot)
+
+
+```
+
+
+
+LOESS then Z score (pop. literature method)
+/// unfinished
+
+```{r loessforreal}
+# OK OK. LOESS THEN Z SCORE
+
+loess_dataset <- final_plate_list
+
+variables_of_interest <- setdiff(colnames(final_plate_list), c( "well", "Row", "Column", "gene"))
+
+rownames(loess_dataset) <- make.unique(loess_dataset$gene)
+
+loess_models <- lapply(variables_of_interest, function(x) {
+    loess(as.formula(paste0("`",x,"`", " ~ Row + Column")),
+          data = loess_dataset,
+          span = 1,  # Adjust?
+          degree = 1)    # Linear fit recommended for spatial patterns
+})
+
+names(loess_models) <- variables_of_interest
+
+loess_fits <- lapply(variables_of_interest, function(y) {
+    loess_models[[y]]["fitted"]
+}) 
+names(loess_fits) <- variables_of_interest
+
+
+loess_results <- lapply(variables_of_interest, function(z){
+    loess_models[[z]][["y"]]-(loess_fits[[z]][["fitted"]]-median(loess_fits[[z]][["fitted"]]))
+})
+
+names(loess_results) <- variables_of_interest
+
+df_loess_results <- data.table(do.call(bind_cols, loess_results))
+
+df_loess_results <- bind_cols(df_loess_results, loess_dataset %>% dplyr::select(c("Row", "Column", "well", "gene")))
+
+
+### Visualise the loessing if need:
+# not fully corrected
+# raw_map(data = final_plate_list$`Spots - Spot Area [px²] - Median per Well`,
+#         well = final_plate_list$well,
+#         plate = 96)
+# 
+# 
+# raw_map(data = df_loess_results[df_loess_results$plate == "P1_SIMA_V1.txt"] %>% dplyr::select(`Spots - Spot Area [px²] - Median per Well`),
+#         well = df_loess_results[df_loess_results$plate == "P1_SIMA_V1.txt"] %>% dplyr::select(well),
+#         plate = 96)
+
+
+
+### Z scores per plate on loess normalised data
+variables_of_interest <- setdiff(colnames(df_loess_results), c("well","Row","Column","gene"))
+
+which_plate <- unique(df_loess_results)
+
+all_plate_z_scores <- data.table()
+
+for (j in seq_along(which_plate)) {
+    
+    # test
+    #print(which_plate[j])
+    
+    ### SUBSET DATA TO PLATE LEVEL FOR Z-SCORE CALCULATIONS
+    temp_plate_list <- df_loess_results 
+    
+    ### BEGIN 2ND LOOP FOR Z SCORE CALCS
+    
+    
+    for (i in seq_along(variables_of_interest)) {
+        
+        #print(variables_of_interest[i])
+        
+        temp_var <- variables_of_interest[i]
+        
+        ### First get the mean and stdev which can change per iteration
+        mean_NTC_var <- mean(temp_plate_list[[temp_var]]) # mean of variable across all genes
+        stdev_var <- sd(temp_plate_list[[temp_var]]) # standard deviation for var across all genes
+        
+        
+        ### Then get the Z-score
+        temp_plate_list <- temp_plate_list %>%
+            mutate(
+                !!paste0(temp_var,"_z_score") := ( (.data[[temp_var]] - mean_NTC_var) / stdev_var)
+            ) # this madness is needed for strings to become variable names
+        ### Then the Sigma Z score
+        assign(paste0("`",temp_var,"sigma_z_score","`"), sd(temp_plate_list[[paste0(temp_var,"_z_score")]][str_detect(temp_plate_list$gene, "NTC")]))
+        #print(eval(as.name(paste0("`",temp_var,"sigma_z_score","`")), envir= .GlobalEnv)) #debugging
+        
+        ### Then the effect sizes
+        temp_plate_list <- temp_plate_list %>%
+            mutate(
+                !!paste0(temp_var,"effect_size") := .data[[paste0(temp_var,"_z_score")]] /eval(as.name(paste0("`",temp_var,"sigma_z_score","`")), envir= .GlobalEnv)
+            )
+        
+    }
+    
+    ### ONCE ALL CALCULATED BIND ONTO PREVIOUS RESULTS
+    all_plate_z_scores <- bind_rows(all_plate_z_scores, temp_plate_list)
+    
+}    
+
+
+
+```
+
+
+```{r checkeffectsizes}
+
+all_plate_z_scores[gene == "AAVS1-T2", mean(nuclei_counteffect_size)]
+all_plate_z_scores[gene == "AAVS1-Cust", mean(nuclei_counteffect_size)]
+
+all_plate_z_scores[gene == "AAVS1-T2", mean(lipid_areaeffect_size)]
+all_plate_z_scores[gene == "AAVS1-Cust", mean(lipid_areaeffect_size)]
+
+```
+
+
+```{r zprimecheck}
+
+
+### Z prime checks
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), gene)
+
+a <- final_plate_list[final_plate_list$gene == "IRS1"] %>% 
+    dplyr::select(cell_width_to_length)%>% 
+    as_vector()
+
+b <- final_plate_list[final_plate_list$gene == "PTEN"] %>% 
+    dplyr::select(cell_width_to_length)%>% 
+    as_vector()
+
+c <- z_scores_post_loess_only[z_scores_post_loess_only$gene == "IRS1"] %>% 
+    dplyr::select(cell_width_to_length_z_score)%>% 
+    as_vector()
+
+d <- z_scores_post_loess_only[z_scores_post_loess_only$gene == "PTEN"] %>% 
+    dplyr::select(cell_width_to_length_z_score)%>% 
+    as_vector()
+
+
+
+zprime(a,b, method = "original")
+zprime(c,d, method = "original")
+
+zprime(a,b, method = "mahalanobis")
+zprime(c,d, method = "mahalanobis") 
+
+zprime(a,b, method = "robust")
+zprime(c,d, method = "robust") # uses median, and is the only one which shows improvement
+
+zprime(a,b, method = "fixsd")
+zprime(c,d, method = "fixsd")
+
+
+
+```
+
+
+Find top 5 genes ranked by Z-score
+
+
+```{r top5genes}
+
+
+### which genes are the most extreme then?
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), gene, plate)
+
+which_col <- setdiff(colnames(z_scores_post_loess_only), c("gene", "plate", "Row", "Column", "well"))
+top_5_genes_zscore <- data.table(Rank = c("1st", "2nd", "3rd", "4th", "5th", "6th", "7th"))
+temp_top_genes <- data.table()
+for (i in seq_along(which_col)) {
+    
+    temp_top_genes <- z_scores_post_loess_only %>%
+        group_by(gene) %>% 
+        summarise_at(vars(-c(plate)), median) %>% 
+        slice_max(.data[[which_col[i]]], n = 7) %>% 
+        dplyr::select(gene) %>% 
+        dplyr::rename(!!which_col[i] := gene)
+    
+    top_5_genes_zscore <- bind_cols(top_5_genes_zscore, temp_top_genes)
+}
+
+top_5_genes_zscore
+
+
+
+median_z_score <- z_scores_post_loess_only %>%
+    group_by(gene) %>% 
+    summarise_at(vars(-c(plate)), median)
+
+# arranged_by_nuc_count_spot <- arrange(median_z_score, desc(`Nuclei Selected - Number of Objects_z_score`) , `Lipid_droplets - Lipid_droplets Area [µm²] - Sum per Well_z_score`) %>% mutate(rank = 1:n())
+
+```
+
+
+PCA again, now on normalised values
+
+
+```{r pcapostnormalandnoempty}
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), gene, Row, Column, well, plate)
+
+pca_plot_data <- z_scores_post_loess_only %>%  filter(gene != "Empty")
+
+
+rownames(pca_plot_data) <- make.names(pca_plot_data$gene, unique = T)
+# 
+# #change colnames
+# 
+# qux <- pca_plot_data
+# 
+# colnames(qux)
+# 
+# colnames(qux) <- c("Nuclei count",
+#                    "Nucleus Area",
+#                    "Nucleus Roundness",
+#                    "Cell Area",
+#                    "Cell Roundness",
+#                    "Cell Ratio Width to Length",
+#                    "Intensity MitoTracker Mean",
+#                    "Intensity MitoTracker Sum",
+#                    "Spot count",
+#                    "Relative Spot Intensity",
+#                    "Spot Area",
+#                    "Lipid droplets Area",
+#                    "Lipid droplets Intensity",
+#                    "gene",
+#                    "Row",
+#                    "Column",
+#                    "well",
+#                    "plate")
+
+# here I remove the columns that are metadata e.g. well, row, col
+numeric_plate <- subset(pca_plot_data, select = -c(plate, Row, Column, well, gene)) %>% 
+    mutate_if(is.integer64, as.numeric)
+
+scaled_plate <- scale(numeric_plate)
+
+pca_bp <- princomp(scaled_plate)
+
+summary(pca_bp)
+
+fviz_eig(pca_bp)
+
+
+fviz_pca_var(pca_bp,axes = c(1,2), col.var = "black", repel = T)+
+    theme_minimal()
+
+
+fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+
+fviz_pca_biplot(pca_bp, axes = c(1,2), col.ind = "cos2") +
+    scale_color_gradient2(low="blue", mid="white", 
+                          high="red", midpoint=0.50)+
+    theme_minimal()
+
+### habillage
+
+pca_plot <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                         habillage = pca_plot_data$gene, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot)
+
+
+
+
+pca_plot_batch <- fviz_pca_ind(pca_bp, axes = c(1,2), col.ind = "cos2", label = "none",
+                               habillage = pca_plot_data$plate, addEllipses = T, ellipse.level = 0.05) +
+    theme_minimal()
+
+ggplotly(pca_plot_batch)
+
+
+### prettier variable contribution plots
+
+
+
+var_contribs <- fviz_contrib(pca_bp, choice = "var")
+
+ggplotly(var_contribs)
+
+fviz_pca_var(pca_bp,
+             repel = TRUE,
+             col.var = "contrib", # Columnor by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07")
+)
+
+```
+
+
+ANOVA?
+
+
+```{r anovas}
+
+
+z_scores_post_loess_only <- all_plate_z_scores %>% 
+    dplyr::select(contains("z_score"), gene, Row, Column, well, plate)
+
+pca_plot_data <- z_scores_post_loess_only %>%  filter(gene != "Empty")
+
+
+### spot count
+
+spot_count_df <- data.frame(spot_count = pca_plot_data$cell_width_to_length_z_score,
+                            gene = pca_plot_data$gene) #pca_plot_data$`Spots - Spot Area [px²] - Mean per Well_z_score`
+
+# Perform ANOVA
+anova_result_sc <- aov(spot_count ~ gene, data = spot_count_df)
+summary(anova_result_sc)
+
+plot(anova_result_sc)
+
+
+# Use the Dunnett's test because Tukey compares everything to everything
+# meaning for our case of 70 genes +5 controls, 75C2 = 2775
+
+library(DescTools)
+sc_ctrl <- DunnettTest(x=spot_count_df$spot_count, g=spot_count_df$gene, control = "NTC3")
+dunnett_summary_sc <- as.data.frame(sc_ctrl$NTC3) %>% 
+    mutate(comparisons = rownames(.))
+
+###
+
+ds_sc <- dunnett_summary_sc %>% as.data.frame() %>% tibble::rownames_to_column(var = "contrast") %>%
+    #extract the tested group name (the part before or after the dash; adjust if needed)
+    mutate(group = str_split_fixed(contrast, "-", 2)[,1], control = str_split_fixed(contrast, "-", 2)[,2]) %>%
+    #order for plotting
+    dplyr::arrange(diff) %>% mutate(contrast = factor(contrast, levels = contrast))
+#add a simple significance label
+
+ds_sc <- ds_sc %>% mutate(sig = case_when( pval < 0.05 ~ "TRUE", .default="FALSE" ))
+
+
+ggplot(ds_sc, aes(x = diff, y = contrast)) + 
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+    geom_point(aes(color = pval < 0.05), size = 2) +
+    #geom_text(aes(label = sig), hjust = -0.3, vjust = 0.5) +
+    scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+    labs(x = "Difference vs NTC3 (diff)", y = "",
+         color = "Significant",
+         title = "Dunnett test estimates and 95% CI - Cell width to length") +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 9))
+
+
+
+```
+
+
+```{r NTCchoices}
+
+
+sd(z_scores_post_loess_only[gene %in% c("PTEN", "IRS1", "NTC1", "NTC3", "NTC4", "NTC5"), cell_width_to_length_z_score])
+
+
+z_scores_post_loess_only[gene == "PTEN", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "NTC1", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "NTC2", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "NTC3", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "NTC4", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "NTC5", sd(nuclei_count_z_score)]
+z_scores_post_loess_only[gene == "IRS1", sd(nuclei_count_z_score)]
+
+
+
+ggplot(z_scores_post_loess_only %>% filter(gene %in% c("NTC1", "NTC2" ,"NTC3", "NTC4", "NTC5")), mapping = aes(x = gene, y = nuclei_count_z_score, colour = gene)) + 
+    geom_violin(trim = FALSE, show.legend = FALSE, linewidth = 1, draw_quantiles = c( 0.5))+
+    geom_point(width = 0.2, show.legend = FALSE)+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    theme_pubr()+
+    scale_colour_viridis(discrete = T, option = "magma", end = 0.9)+
+    labs(title = "Nuclei count (normalised) comparing NTCs", x = "Gene Knockdown", y = "Nuclei count Z-score")
+
+#scale_colour_manual(values = c("orange", "grey", "grey", "grey", "grey", "grey" , "purple"))
+#labs(title = "Cell width to length", x = "Gene Knockdown", y = "Cell width to length")+
+#stat_compare_means(comparisons = list(c("NTC3", "NTC5")))
+### calculations for excel sheet on power
+
+#var.test(z_scores_post_loess_only[gene == "NTC3", nuclei_count_z_score], z_scores_post_loess_only[gene == "NTC5", nuclei_count_z_score] )
+
+#LeveneTest()
+```
+
+
+Effect sizes
+
+
+
+```{r effectsizes}
+
+
+to_plot <- colnames(all_plate_z_scores)[str_detect(colnames(all_plate_z_scores),"effect")]
+
+#to_plot <- c("spot_intensityeffect_size", "cell_width_to_lengtheffect_size")
+
+for (i in 1:length(to_plot)) {
+    
+    temp_var <- to_plot[i]
+    
+    p <- ggplot(all_plate_z_scores, mapping = aes_string(x = "gene", y = temp_var)) +
+    geom_boxplot()+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    theme_pubr()+
+    ggtitle(paste0(temp_var))
+    
+    
+    print(p)
+    
+}
+
+
+
+ggplot(all_plate_z_scores, mapping = aes_string(x = "gene", y= "cell_width_to_lengtheffect_size"))+
+    geom_boxplot()+
+    scale_x_discrete(guide = guide_axis(n.dodge = 2))+
+    theme_pubr()+
+    labs(title = "Cell-width-to-length effect sizes", x = "Gene Knockdown", y = "Cell-width-to-length effect size")
+
+
+
+```
+
+```{r bigchunk}
+
+# library(dplyr)
+# library(tidyr)
+# library(ggplot2)
+library(ggrepel)
+
+# ------------------------------------------------------------
+# 1. Settings
+# ------------------------------------------------------------
+
+reference_gene <- "NTC3"
+
+# NULL includes all retained genes.
+# Otherwise, replace NULL with your exact gene names:
+# genes_to_compare <- c("IRS1", "PTEN", "POLA1", "PPARG")
+# NTC3 is always included automatically.
+genes_to_compare <- NULL
+
+exclude_empty_wells <- TRUE
+
+ellipse_level <- 0.20
+point_size <- 1.5
+point_alpha <- 0.6
+label_genes <- TRUE
+
+metadata_cols <- c( "well", "Row", "Column", "gene")
+
+# Change the displayed label without changing gene identities.
+display_gene <- function(x) {
+    x <- as.character(x)
+    ifelse(x == reference_gene, "NTC", x)
+}
+
+# ------------------------------------------------------------
+# 2. Input checks
+# ------------------------------------------------------------
+
+loess_dataset <- as.data.frame(final_plate_list)
+
+missing_metadata <- setdiff(metadata_cols, names(loess_dataset))
+
+if (length(missing_metadata) > 0L) {
+    stop(
+        "Missing metadata columns: ",
+        paste(missing_metadata, collapse = ", ")
+    )
+}
+
+
+loess_dataset$gene <- trimws(as.character(loess_dataset$gene))
+
+if (exclude_empty_wells) {
+    loess_dataset <- loess_dataset %>%
+        filter(tolower(gene) != "empty")
+}
+
+if (nrow(loess_dataset) == 0L) {
+    stop("No wells remain for analysis.")
+}
+
+
+if (!is.numeric(loess_dataset$Row) ||
+    !is.numeric(loess_dataset$Column)) {
+    stop("Row and Column must be numeric.")
+}
+
+variables_of_interest <- setdiff(
+    names(loess_dataset),
+    metadata_cols
+)
+
+if (length(variables_of_interest) == 0L) {
+    stop("No measurement columns were found.")
+}
+
+numeric_measurements <- vapply(
+    loess_dataset[variables_of_interest],
+    is.numeric,
+    logical(1)
+)
+
+if (!all(numeric_measurements)) {
+    stop(
+        "Non-numeric measurement columns: ",
+        paste(
+            variables_of_interest[!numeric_measurements],
+            collapse = ", "
+        )
+    )
+}
+
+if (!any(loess_dataset$gene == reference_gene)) {
+    stop("No wells match reference_gene: ", reference_gene)
+}
+
+if (is.null(genes_to_compare)) {
+    selected_genes <- unique(loess_dataset$gene)
+} else {
+    selected_genes <- unique(c(
+        reference_gene,
+        trimws(as.character(genes_to_compare))
+    ))
+}
+
+missing_genes <- setdiff(selected_genes, loess_dataset$gene)
+
+if (length(missing_genes) > 0L) {
+    stop(
+        "Requested genes were not found: ",
+        paste(missing_genes, collapse = ", ")
+    )
+}
+
+# NTC appears first in the PCA legend and at the top of flipped plots.
+gene_levels <- c(
+    reference_gene,
+    sort(setdiff(selected_genes, reference_gene))
+)
+
+box_gene_levels <- rev(gene_levels)
+
+gene_colours <- setNames(
+    c(
+        "#B31B21",
+        grDevices::hcl.colors(
+            length(gene_levels) - 1L,
+            palette = "Dark 3"
+        )
+    ),
+    gene_levels
+)
+
+# ------------------------------------------------------------
+# 3. LOESS correction using all retained wells on the plate
+# ------------------------------------------------------------
+
+df_loess_results <- loess_dataset
+
+for (temp_var in variables_of_interest) {
+
+    fit_data <- data.frame(
+        value = loess_dataset[[temp_var]],
+        Row = loess_dataset$Row,
+        Column = loess_dataset$Column
+    )
+
+    valid <- with(
+        fit_data,
+        is.finite(value) &
+            is.finite(Row) &
+            is.finite(Column)
+    )
+
+    corrected <- rep(NA_real_, nrow(fit_data))
+
+    if (sum(valid) < 6L ||
+        length(unique(fit_data$Row[valid])) < 2L ||
+        length(unique(fit_data$Column[valid])) < 2L) {
+
+        warning(
+            "Insufficient spatial data for ", temp_var,
+            "; corrected values set to NA."
+        )
+
+    } else {
+
+        fit <- stats::loess(
+            value ~ Row + Column,
+            data = fit_data[valid, , drop = FALSE],
+            span = 1,
+            degree = 1,
+            normalize = FALSE,
+            na.action = stats::na.fail
+        )
+
+        fitted_values <- as.numeric(fit$fitted)
+
+        if (any(!is.finite(fitted_values))) {
+            stop("Non-finite LOESS fitted values for: ", temp_var)
+        }
+
+        corrected[valid] <- fit_data$value[valid] -
+            (fitted_values - median(fitted_values))
+    }
+
+    df_loess_results[[temp_var]] <- corrected
+}
+
+# ------------------------------------------------------------
+# 4. Whole-plate z-scores for PCA
+# ------------------------------------------------------------
+
+all_plate_z_scores <- df_loess_results
+z_score_cols <- paste0(variables_of_interest, "_z_score")
+
+if (any(z_score_cols %in% names(df_loess_results))) {
+    stop("Generated z-score names overlap existing input columns.")
+}
+
+for (i in seq_along(variables_of_interest)) {
+
+    x <- df_loess_results[[variables_of_interest[i]]]
+    valid <- is.finite(x)
+    z <- rep(NA_real_, length(x))
+
+    if (sum(valid) >= 2L) {
+        plate_sd <- sd(x[valid])
+
+        if (is.finite(plate_sd) && plate_sd > 0) {
+            z[valid] <- (x[valid] - mean(x[valid])) / plate_sd
+        }
+    }
+
+    all_plate_z_scores[[z_score_cols[i]]] <- z
+}
+
+z_scores_post_loess_only <- all_plate_z_scores %>%
+    filter(gene %in% selected_genes) %>%
+    select(all_of(z_score_cols), gene)
+
+# ------------------------------------------------------------
+# 5. NTC3 reference statistics and effect scores
+# ------------------------------------------------------------
+
+measurement_long <- df_loess_results %>%
+    filter(gene %in% selected_genes) %>%
+    select(all_of(c(metadata_cols, variables_of_interest))) %>%
+    pivot_longer(
+        cols = all_of(variables_of_interest),
+        names_to = "measurement",
+        values_to = "value"
+    ) %>%
+    mutate(
+        value = if_else(is.finite(value), value, NA_real_)
+    )
+
+reference_stats <- measurement_long %>%
+    filter(gene == reference_gene) %>%
+    group_by( measurement) %>%
+    summarise(
+        n_reference = sum(!is.na(value)),
+        reference_mean = if (n_reference > 0L) {
+            mean(value, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        reference_sd = if (n_reference >= 2L) {
+            sd(value, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        .groups = "drop"
+    )
+
+# One standardised deviation per well:
+# (well value - NTC3 mean) / NTC3 SD.
+# These are well-level scores, not individual Glass's deltas.
+well_effect_scores <- measurement_long %>%
+    left_join(reference_stats, by = c( "measurement")) %>%
+    mutate(
+        standardised_deviation = if_else(
+            is.finite(value) &
+                n_reference >= 2L &
+                is.finite(reference_mean) &
+                is.finite(reference_sd) & reference_sd > 0,
+            (value - reference_mean) / reference_sd,
+            NA_real_
+        )
+    )
+
+# Conventional Glass's delta: one value per gene and measurement.
+all_plate_effect_sizes <- measurement_long %>%
+    group_by( gene, measurement) %>%
+    summarise(
+        n_wells = sum(!is.na(value)),
+        gene_mean = if (n_wells > 0L) {
+            mean(value, na.rm = TRUE)
+        } else {
+            NA_real_
+        },
+        .groups = "drop"
+    ) %>%
+    left_join(reference_stats, by = c("measurement")) %>%
+    mutate(
+        glass_delta = if_else(
+            n_wells > 0L &
+                n_reference >= 2L &
+                is.finite(gene_mean) &
+                is.finite(reference_mean) &
+                is.finite(reference_sd) & reference_sd > 0,
+            (gene_mean - reference_mean) / reference_sd,
+            NA_real_
+        )
+    )
+
+if (any(!is.finite(all_plate_effect_sizes$glass_delta))) {
+    warning(
+        "Some effects are unavailable. Check n_wells, ",
+        "n_reference and reference_sd in all_plate_effect_sizes."
+    )
+}
+
+# ------------------------------------------------------------
+# 6. Well-level boxplots and gene-level Glass's delta plots
+# ------------------------------------------------------------
+
+well_boxplots <- list()
+glass_delta_plots <- list()
+
+for (selected_measurement in variables_of_interest) {
+
+    single_plot_data <- well_effect_scores %>%
+        filter(
+            measurement == selected_measurement,
+            is.finite(standardised_deviation)
+        ) %>%
+        mutate(
+            gene = factor(gene, levels = box_gene_levels),
+            gene_type = if_else(
+                as.character(gene) == reference_gene,
+                "NTC",
+                "Other genes"
+            )
+        )
+
+    if (nrow(single_plot_data) == 0L) {
+        warning("No valid effects to plot for: ", selected_measurement)
+        next
+    }
+
+    ntc_values <- single_plot_data$standardised_deviation[
+        as.character(single_plot_data$gene) == reference_gene
+    ]
+
+    ntc_median <- median(ntc_values)
+
+    p <- ggplot(
+        single_plot_data,
+        aes(
+            x = gene,
+            y = standardised_deviation,
+            group = gene
+        )
+    ) +
+        geom_hline(
+            yintercept = 0,
+            colour = "grey70",
+            linetype = "dashed"
+        ) +
+        geom_boxplot(
+            aes(colour = gene_type),
+            outlier.shape = NA
+        ) +
+        geom_point(
+            position = position_jitter(
+                width = 0.15,
+                height = 0,
+                seed = 1
+            ),
+            alpha = point_alpha,
+            size = point_size
+        ) +
+        geom_hline(
+            yintercept = ntc_median,
+            colour = "#B31B21",
+            linetype = "dotted",
+            linewidth = 0.8
+        ) +
+        scale_colour_manual(
+            values = c(
+                "NTC" = "#B31B21",
+                "Other genes" = "#1465AC"
+            ),
+            name = "Gene type"
+        ) +
+        scale_x_discrete(labels = display_gene) +
+        coord_flip() +
+        labs(
+            title = selected_measurement,
+            subtitle = paste(
+                "Red dotted line: NTC well-score median =",
+                signif(ntc_median, 3)
+            ),
+            x = "Gene",
+            y = "Well deviation from NTC mean (NTC SD units)"
+        ) +
+        theme_bw() +
+        theme(
+            panel.grid.major.y = element_blank(),
+            panel.grid.minor = element_blank()
+        )
+
+    well_boxplots[[selected_measurement]] <- p
+    print(p)
+
+    # One Glass's delta per gene: display points rather than boxes.
+    delta_data <- all_plate_effect_sizes %>%
+        filter(
+            measurement == selected_measurement,
+            is.finite(glass_delta)
+        ) %>%
+        mutate(
+            gene = factor(gene, levels = box_gene_levels)
+        )
+
+    delta_plot <- ggplot(
+        delta_data,
+        aes(x = gene, y = glass_delta, colour = gene)
+    ) +
+        geom_hline(
+            yintercept = 0,
+            colour = "grey70",
+            linetype = "dashed"
+        ) +
+        geom_point(size = 3) +
+        scale_colour_manual(
+            values = gene_colours,
+            guide = "none"
+        ) +
+        scale_x_discrete(labels = display_gene) +
+        coord_flip() +
+        labs(
+            title = selected_measurement,
+            subtitle = "One gene-level effect per gene on this plate",
+            x = "Gene",
+            y = "Glass's delta vs NTC"
+        ) +
+        theme_bw() +
+        theme(
+            panel.grid.major.y = element_blank(),
+            panel.grid.minor = element_blank()
+        )
+
+    glass_delta_plots[[selected_measurement]] <- delta_plot
+    print(delta_plot)
+}
+
+# ------------------------------------------------------------
+# 7. Matched PCA inputs for selected genes
+#    LOESS preserves row order, so both matrices use the same rows.
+# ------------------------------------------------------------
+
+selected_rows <- which(loess_dataset$gene %in% selected_genes)
+
+before_matrix <- as.matrix(
+    loess_dataset[
+        selected_rows,
+        variables_of_interest,
+        drop = FALSE
+    ]
+)
+
+after_matrix <- as.matrix(
+    all_plate_z_scores[
+        selected_rows,
+        z_score_cols,
+        drop = FALSE
+    ]
+)
+
+colnames(after_matrix) <- variables_of_interest
+
+has_variation <- function(x) {
+    x <- x[is.finite(x)]
+    length(x) >= 2L && is.finite(sd(x)) && sd(x) > 0
+}
+
+keep_columns <- apply(before_matrix, 2, has_variation) &
+    apply(after_matrix, 2, has_variation)
+
+if (any(!keep_columns)) {
+    message(
+        "Excluded PCA measurements: ",
+        paste(colnames(before_matrix)[!keep_columns], collapse = ", ")
+    )
+}
+
+before_matrix <- before_matrix[, keep_columns, drop = FALSE]
+after_matrix <- after_matrix[, keep_columns, drop = FALSE]
+
+if (ncol(before_matrix) < 2L) {
+    stop("PCA requires at least two usable measurements.")
+}
+
+keep_rows <- rowSums(!is.finite(before_matrix)) == 0 &
+    rowSums(!is.finite(after_matrix)) == 0
+
+message(
+    "PCA: excluding ", sum(!keep_rows),
+    " selected wells with missing/non-finite measurements."
+)
+
+before_matrix <- before_matrix[keep_rows, , drop = FALSE]
+after_matrix <- after_matrix[keep_rows, , drop = FALSE]
+
+pca_metadata <- loess_dataset[
+    selected_rows[keep_rows],
+    c( "well", "gene"),
+    drop = FALSE
+]
+
+if (nrow(pca_metadata) < 3L) {
+    stop("PCA requires at least three complete selected wells.")
+}
+
+# Recheck variability after removing incomplete wells.
+keep_columns <- apply(before_matrix, 2, has_variation) &
+    apply(after_matrix, 2, has_variation)
+
+before_matrix <- before_matrix[, keep_columns, drop = FALSE]
+after_matrix <- after_matrix[, keep_columns, drop = FALSE]
+
+if (ncol(before_matrix) < 2L) {
+    stop("Too few variable measurements remain for PCA.")
+}
+
+missing_pca_genes <- setdiff(selected_genes, pca_metadata$gene)
+
+if (length(missing_pca_genes) > 0L) {
+    warning(
+        "No complete PCA wells remain for: ",
+        paste(missing_pca_genes, collapse = ", ")
+    )
+}
+
+# ------------------------------------------------------------
+# 8. Fit PCAs and extract scores
+# ------------------------------------------------------------
+
+pca_before <- prcomp(
+    before_matrix,
+    center = TRUE,
+    scale. = TRUE
+)
+
+pca_after <- prcomp(
+    after_matrix,
+    center = TRUE,
+    scale. = TRUE
+)
+
+make_scores <- function(pca_object, metadata) {
+    metadata %>%
+        mutate(
+            gene = factor(gene, levels = gene_levels),
+            PC1 = pca_object$x[, 1],
+            PC2 = pca_object$x[, 2]
+        )
+}
+
+before_scores <- make_scores(pca_before, pca_metadata)
+after_scores <- make_scores(pca_after, pca_metadata)
+
+axis_labels <- function(pca_object) {
+    variance_percent <- 100 * pca_object$sdev^2 /
+        sum(pca_object$sdev^2)
+
+    list(
+        x = sprintf("PC1 (%.1f%%)", variance_percent[1]),
+        y = sprintf("PC2 (%.1f%%)", variance_percent[2])
+    )
+}
+
+padded_range <- function(x) {
+    limits <- range(x, finite = TRUE)
+    padding <- diff(limits) * 0.05
+
+    if (padding == 0) {
+        padding <- 1
+    }
+
+    limits + c(-padding, padding)
+}
+
+shared_x_limits <- padded_range(
+    c(before_scores$PC1, after_scores$PC1)
+)
+
+shared_y_limits <- padded_range(
+    c(before_scores$PC2, after_scores$PC2)
+)
+
+get_ellipse_data <- function(scores) {
+    scores %>%
+        group_by(gene) %>%
+        filter(
+            n() >= 4L &&
+                qr(
+                    cbind(
+                        PC1 - mean(PC1),
+                        PC2 - mean(PC2)
+                    )
+                )$rank == 2L
+        ) %>%
+        ungroup()
+}
+
+# ------------------------------------------------------------
+# 9. Gene-coloured PCA plots only
+# ------------------------------------------------------------
+
+make_gene_pca_plot <- function(scores, pca_object, plot_title) {
+
+    axes <- axis_labels(pca_object)
+    ellipse_scores <- get_ellipse_data(scores)
+
+    gene_centres <- scores %>%
+        group_by(gene) %>%
+        summarise(
+            PC1 = mean(PC1),
+            PC2 = mean(PC2),
+            .groups = "drop"
+        )
+
+    p <- ggplot(scores, aes(PC1, PC2, colour = gene)) +
+        geom_point(
+            alpha = point_alpha,
+            size = point_size
+        ) +
+        scale_colour_manual(
+            values = gene_colours,
+            limits = gene_levels,
+            breaks = gene_levels,
+            labels = display_gene,
+            drop = FALSE,
+            name = "Gene"
+        ) +
+        labs(
+            title = plot_title,
+            subtitle = paste0(
+                round(ellipse_level * 100),
+                "% normal data ellipses where estimable"
+            ),
+            x = axes$x,
+            y = axes$y
+        ) +
+        coord_equal(
+            xlim = shared_x_limits,
+            ylim = shared_y_limits,
+            expand = FALSE
+        ) +
+        theme_minimal(base_size = 12) +
+        theme(
+            panel.grid.minor = element_blank(),
+            legend.position = "right"
+        ) +
+        guides(
+            colour = guide_legend(
+                override.aes = list(alpha = 1, size = 3)
+            )
+        )
+
+    if (nrow(ellipse_scores) > 0L) {
+        p <- p +
+            stat_ellipse(
+                data = ellipse_scores,
+                aes(group = gene),
+                type = "norm",
+                level = ellipse_level,
+                linewidth = 0.7,
+                show.legend = FALSE
+            )
+    }
+
+    if (label_genes) {
+        p <- p +
+            geom_label_repel(
+                data = gene_centres,
+                aes(label = display_gene(gene)),
+                fill = "white",
+                seed = 1,
+                max.overlaps = Inf,
+                show.legend = FALSE
+            )
+    }
+
+    p
+}
+
+pca_all_genes_before <- make_gene_pca_plot(
+    before_scores,
+    pca_before,
+    "Before LOESS correction — selected genes"
+)
+
+pca_all_genes_after <- make_gene_pca_plot(
+    after_scores,
+    pca_after,
+    "After LOESS correction — selected genes"
+)
+
+print(pca_all_genes_before)
+print(pca_all_genes_after)
+
+```

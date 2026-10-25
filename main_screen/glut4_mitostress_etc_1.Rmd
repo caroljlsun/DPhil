@@ -1,0 +1,455 @@
+---
+title: "glut4_mitostress_etc_1"
+author: "CZJS"
+date: "2026-09-10"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+
+
+Loading libraries
+
+```{r libraries}
+
+setwd("comp_bio/capture_c_adipocytes/main_screen")
+
+library(tidyverse)
+library(data.table)
+library(plotly)
+library(patchwork)
+library(ggpubr)
+
+```
+
+
+
+```{r glut4}
+
+
+PPP2R5A_glut4_dataset <- read_csv("147848_Well_Aggregated_Results_raw.csv") %>% 
+    dplyr::filter(GENE_SYMBOL %in% c("PPP2R5A", "siNT"))
+
+
+PYGO2_glut4_dataset <- read_csv("147300_Well_Aggregated.csv") %>% 
+    dplyr::filter(GENE_SYMBOL %in% c("PYGO2", "siNT"))
+
+
+ZFP_glut4_dataset <- read_csv("149191_Well_Aggregated_Results_raw.csv") %>% 
+    dplyr::filter(str_detect(GENE_SYMBOL, "ZFP36L2|NT")) %>% 
+    dplyr::mutate(Mean_HA_over_GFP = as.numeric(`Nuclei Selected - Mean_HA_over_GFP - Mean per Well`)) 
+
+
+PPP2R5A_glut4_dataset %>% 
+    ggplot(aes(y=`Nuclei Selected - Mean_HA_over_GFP MEDIAN`,x = GENE_SYMBOL, colour=GENE_SYMBOL)) +
+    geom_boxplot(width = 0.6)+
+    stat_compare_means(method = "t.test", comparisons = list(c("PPP2R5A", "siNT")), bracket.size = 0.3)+
+    theme_pubr()+
+    theme(
+        panel.grid.major = element_line(colour = "grey80", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "grey90", linewidth = 0.3)
+    )
+# save as pdf 5x5 inches ppp2r5a_glut4
+
+
+PYGO2_glut4_dataset %>% 
+    ggplot(aes(y=`Nuclei Selected - Mean_HA_over_GFP MEDIAN`,x = GENE_SYMBOL, colour=GENE_SYMBOL)) +
+    geom_boxplot(width = 0.6)+
+    stat_compare_means(method = "t.test", comparisons = list(c("PYGO2", "siNT")), bracket.size = 0.3)+
+    theme_pubr()+
+    theme(
+        panel.grid.major = element_line(colour = "grey80", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "grey90", linewidth = 0.3)
+    )
+
+# save as pdf 5x5 inches pygo2_glut4
+
+
+ggplot()+
+    geom_point(data = ZFP_glut4_dataset, aes(y = Mean_HA_over_GFP,x = log10(STIMULUS_CONC_1), colour=GENE_SYMBOL), size = 3)+
+    geom_ribbon(data = summ, aes(x = log10(STIMULUS_CONC_1), ymin = mean_y - sd_y, ymax = mean_y + sd_y, fill = GENE_SYMBOL), alpha = 0.15) +
+    #geom_ribbon(aes(y = Mean_HA_over_GFP,x = sd(log10(STIMULUS_CONC_1))),alpha = 0.15) +
+    #geom_smooth(aes(y = Mean_HA_over_GFP,x = log10(STIMULUS_CONC_1),group = GENE_SYMBOL), method = "loess", se = T, span = 1.5)+
+    #geom_smooth(aes(group = GENE_SYMBOL), method = "loess", se = T, span = 1.5)+
+    #stat_compare_means(method = "t.test", comparisons = list(c("PYGO2", "siNT")), bracket.size = 0.3)+
+    theme_pubr()
+
+# SD bands computed at each (exact) dose
+summ <- ZFP_glut4_dataset %>%
+    dplyr::group_by(GENE_SYMBOL, STIMULUS_CONC_1) %>%
+    summarise(mean_y = mean(Mean_HA_over_GFP, na.rm = TRUE),
+              sd_y = sd(Mean_HA_over_GFP, na.rm = TRUE),
+              n = sum(!is.na(Mean_HA_over_GFP)), .groups = "drop")
+
+
+
+```
+
+
+```{r curvefitting}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(drc)
+library(stringr)
+library(tibble)
+library(scales)
+
+# ---- prepare data ----
+df <- ZFP_glut4_dataset %>%
+    mutate(
+        GENE_SYMBOL = str_replace_all(GENE_SYMBOL, "[\u200B-\u200D\uFEFF]", "")
+    ) %>%
+    filter(str_detect(GENE_SYMBOL, "NT|ZFP36L2")) %>%
+    transmute(
+        GENE_SYMBOL = factor(GENE_SYMBOL, levels = c("NT", "ZFP36L2")),
+        dose = as.numeric(STIMULUS_CONC_1),
+        response = as.numeric(Mean_HA_over_GFP)
+    ) %>%
+    filter(!is.na(GENE_SYMBOL), !is.na(dose), !is.na(response))
+
+# ---- plotting dose=0 on log axis ----
+min_pos <- min(df$dose[df$dose > 0], na.rm = TRUE)
+max_pos <- max(df$dose[df$dose > 0], na.rm = TRUE)
+zero_pos <- min_pos / 3
+
+df <- df %>%
+    mutate(dose_plot = ifelse(dose == 0, zero_pos, dose))
+
+# ---- fitting only uses positive doses ----
+fit_df <- df %>% filter(dose > 0)
+
+# ---- observed mean ± SD ----
+sum_df <- df %>%
+    group_by(GENE_SYMBOL, dose, dose_plot) %>%
+    summarise(
+        mean_y = mean(response, na.rm = TRUE),
+        sd_y = sd(response, na.rm = TRUE),
+        .groups = "drop"
+    )
+
+# ---- helper: keep only stable fitted models ----
+stable_fit <- function(m) {
+    if (inherits(m, "try-error")) return(FALSE)
+    V <- try(vcov(m), silent = TRUE)
+    if (inherits(V, "try-error")) return(FALSE)
+    all(is.finite(coef(m))) && all(is.finite(diag(V)))
+}
+
+# ---- candidate sigmoid models ----
+mods <- list(
+    LL3 = try(
+        drm(
+            response ~ dose,
+            curveid = GENE_SYMBOL,
+            data = fit_df,
+            fct = LL.3(names = c("b", "d", "e"))
+        ),
+        silent = TRUE
+    ),
+    LL4 = try(
+        drm(
+            response ~ dose,
+            curveid = GENE_SYMBOL,
+            data = fit_df,
+            fct = LL.4(names = c("b", "c", "d", "e"))
+        ),
+        silent = TRUE
+    ),
+    LL5 = try(
+        drm(
+            response ~ dose,
+            curveid = GENE_SYMBOL,
+            data = fit_df,
+            fct = LL.5(names = c("b", "c", "d", "e", "f"))
+        ),
+        silent = TRUE
+    )
+)
+
+mods <- mods[vapply(mods, stable_fit, logical(1))]
+
+if (length(mods) == 0) {
+    stop("No stable dose-response model could be fitted.")
+}
+
+# ---- model selection by AIC ----
+aic_tab <- data.frame(
+    model = names(mods),
+    AIC = vapply(mods, AIC, numeric(1))
+) %>%
+    arrange(AIC)
+
+# choose simplest model within ΔAIC <= 2
+model_order <- c("LL3", "LL4", "LL5")
+eligible_models <- aic_tab$model[aic_tab$AIC <= min(aic_tab$AIC) + 2]
+best_name <- model_order[model_order %in% eligible_models][1]
+best_fit <- mods[[best_name]]
+
+# ---- helper for compParm extraction ----
+get_num <- function(x, pattern) {
+    idx <- grep(pattern, names(x), ignore.case = TRUE)
+    if (length(idx) == 0) return(NA_real_)
+    suppressWarnings(as.numeric(x[1, idx[1], drop = TRUE]))
+}
+
+extract_comp <- function(model, parm) {
+    out <- try(as.data.frame(compParm(model, parm, "-")), silent = TRUE)
+    if (inherits(out, "try-error")) {
+        return(tibble(
+            parameter = parm,
+            comparison = NA_character_,
+            estimate = NA_real_,
+            se = NA_real_,
+            t_value = NA_real_,
+            p_value = NA_real_
+        ))
+    }
+    
+    tibble(
+        parameter = parm,
+        comparison = as.character(out[1, 1, drop = TRUE]),
+        estimate = get_num(out, "^Estimate$"),
+        se = get_num(out, "Std\\.? Error"),
+        t_value = get_num(out, "t-value"),
+        p_value = get_num(out, "p-value")
+    )
+}
+
+# ---- compare all parameters in the selected model ----
+params_by_model <- list(
+    LL3 = c("b", "d", "e"),
+    LL4 = c("b", "c", "d", "e"),
+    LL5 = c("b", "c", "d", "e", "f")
+)
+
+param_labels <- c(
+    b = "slope",
+    c = "lower",
+    d = "upper",
+    e = "EC50",
+    f = "asymmetry"
+)
+
+curve_comp_df <- bind_rows(lapply(params_by_model[[best_name]], function(p) {
+    extract_comp(best_fit, p)
+})) %>%
+    mutate(
+        parameter_label = unname(param_labels[parameter])
+    )
+
+# ---- EC50 estimates ----
+ec50_df <- suppressWarnings(
+    as.data.frame(ED(best_fit, 50, interval = "delta"))
+) %>%
+    rownames_to_column("curve")
+
+names(ec50_df)[2:5] <- c("EC50", "SE", "Lower", "Upper")
+
+ec50_df <- ec50_df %>%
+    mutate(
+        GENE_SYMBOL = factor(str_extract(curve, "NT|ZFP36L2"), levels = levels(df$GENE_SYMBOL))
+    )
+
+# ---- predictions for fitted curves ----
+pred_df <- expand.grid(
+    dose = exp(seq(log(min_pos), log(max_pos), length.out = 300)),
+    GENE_SYMBOL = levels(df$GENE_SYMBOL)
+)
+
+pred_df$pred <- predict(best_fit, newdata = pred_df)
+
+# ---- label positions ----
+yr <- range(df$response, na.rm = TRUE)
+y_span <- diff(yr)
+if (y_span == 0) y_span <- 1
+
+ec50_df <- ec50_df %>%
+    arrange(GENE_SYMBOL) %>%
+    mutate(
+        label_y = max(df$response, na.rm = TRUE) - (seq_len(n()) - 1) * 0.10 * y_span
+    )
+
+# ---- annotation text ----
+fmt_p <- function(p) {
+    ifelse(is.na(p), "NA", format.pval(p, digits = 2, eps = 1e-3))
+}
+
+annot_text <- paste(
+    c(
+        paste0("Chosen model: ", best_name),
+        paste0(curve_comp_df$parameter_label, " p = ", fmt_p(curve_comp_df$p_value))
+    ),
+    collapse = "\n"
+)
+
+# ---- x-axis breaks ----
+pos_breaks <- sort(unique(df$dose[df$dose > 0]))
+x_breaks <- c(zero_pos, pos_breaks)
+x_labels <- c("0", format(signif(pos_breaks, 2), scientific = FALSE, trim = TRUE))
+# ---- plot ----
+p <- ggplot() +
+    geom_point(
+        data = df,
+        aes(x = dose_plot, y = response, colour = GENE_SYMBOL),
+        alpha = 0.65, size = 2
+    ) +
+    geom_errorbar(
+        data = sum_df,
+        aes(x = dose_plot, ymin = mean_y - sd_y, ymax = mean_y + sd_y, colour = GENE_SYMBOL),
+        width = 0
+    ) +
+    geom_point(
+        data = sum_df,
+        aes(x = dose_plot, y = mean_y, colour = GENE_SYMBOL),
+        size = 2.5
+    ) +
+    geom_line(
+        data = pred_df,
+        aes(x = dose, y = pred, colour = GENE_SYMBOL),
+        linewidth = 1.2
+    ) +
+    geom_vline(
+        data = ec50_df,
+        aes(xintercept = EC50, colour = GENE_SYMBOL),
+        linetype = "dashed"
+    ) +
+    geom_text(
+        data = ec50_df,
+        aes(
+            x = EC50,
+            y = label_y,
+            label = paste0(GENE_SYMBOL, " EC50 = ", signif(EC50, 3)),
+            colour = GENE_SYMBOL
+        ),
+        angle = 90,
+        vjust = -0.4,
+        hjust = 0,
+        show.legend = FALSE
+    ) +
+    annotate(
+        "label",
+        x = max_pos,
+        y = max(df$response, na.rm = TRUE),
+        hjust = 1,
+        vjust = 1,
+        size = 3.6,
+        label = annot_text
+    ) +
+    scale_x_log10(breaks = x_breaks, labels = x_labels) +
+    scale_colour_manual(values = c("NT" = "#F8766D", "ZFP36L2" = "#00BFC4")) +
+    labs(
+        title = "Dose-response fit for NT vs ZFP36L2",
+        subtitle = "Points = raw data; error bars = mean ± SD; dashed lines = EC50",
+        x = "STIMULUS_CONC_1",
+        y = "Mean_HA_over_GFP",
+        colour = "GENE_SYMBOL"
+    ) +
+    theme_pubr()
+
+# print(aic_tab)         # model selection table
+# print(curve_comp_df)   # parameter-by-parameter curve comparison
+# print(ec50_df)         # EC50 estimates + CI
+# print(p)
+
+p_clean <- ggplot() +
+    geom_point(
+        data = df,
+        aes(x = dose_plot, y = response, colour = GENE_SYMBOL),
+        alpha = 0.65, size = 2
+    ) +
+    geom_errorbar(
+        data = sum_df,
+        aes(x = dose_plot, ymin = mean_y - sd_y, ymax = mean_y + sd_y, colour = GENE_SYMBOL),
+        width = 0
+    ) +
+    geom_point(
+        data = sum_df,
+        aes(x = dose_plot, y = mean_y, colour = GENE_SYMBOL),
+        size = 2.5
+    ) +
+    geom_line(
+        data = pred_df,
+        aes(x = dose, y = pred, colour = GENE_SYMBOL),
+        linewidth = 1.2
+    ) +
+    scale_x_log10(breaks = x_breaks, labels = x_labels) +
+    scale_colour_manual(values = c("ZFP36L2" = "#F8766D", "NT" = "#00BFC4")) +
+    labs(
+        title = "Dose-response fit for ZFP36L2 vs NT",
+        x = "Insulin dose",
+        y = "Mean HA over GFP (GLUT4m/GLUT4t)",
+        colour = NULL
+    ) +
+    theme_pubr()+
+    theme(
+        panel.grid.major = element_line(colour = "grey80", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "grey90", linewidth = 0.3)
+    )
+
+
+print(p_clean)
+#save as dose_response_ZFP36L2 png 800x600 pdf 8x6 inches
+
+```
+
+```{r mitostress}
+
+library(viridis)
+library(ggsignif)
+
+mitostress <- fread("CZJS_Hits_XF_Imputation_for_plotting.csv")
+
+#mitostress$sigstars <- case_when()
+
+# ggplot(data= mitostress, aes(x = exp_group, y = effect_size, fill = exp_group, label = sig_flag)) +
+#     geom_bar(stat = "identity") +
+#     geom_errorbar( aes( ymin=conf_interval_lower, ymax=conf_interval_upper), width=0.4, colour="grey", alpha=0.9, size=1.3)+
+#     facet_wrap(facets = vars(parameter), nrow = 4)+
+#     theme_pubr()+
+#     scale_fill_manual(values = viridis(n = 3))+
+#     geom_text() #vjust = 0
+
+mitostress <- mitostress %>%
+    mutate(
+        sigstars = case_when(
+            is.na(p_value)  ~ "",
+            p_value < 0.001 ~ "***",
+            p_value < 0.01  ~ "**",
+            p_value < 0.05  ~ "*",
+            TRUE           ~ ""
+        )
+    )
+
+ggplot(
+    mitostress,
+    aes(x = exp_group, y = effect_size, fill = exp_group)
+) +
+    geom_col(width = 0.6) +
+    geom_errorbar(
+        aes(ymin = conf_interval_lower, ymax = conf_interval_upper),
+        width = 0.2,
+        colour = "black",
+        alpha = 0.9,
+        linewidth = 1
+    ) +
+    geom_text(
+        aes(y = effect_size, label = sigstars),
+        vjust = -0.5,
+        show.legend = FALSE, size = 10
+    ) +
+    facet_wrap(vars(parameter), nrow = 4) +
+    theme_pubr() +
+    scale_fill_manual(values = magma(n = 3, begin = 0.2, end = 0.8)) +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))+
+    theme(
+        panel.grid.major = element_line(colour = "grey80", linewidth = 0.5),
+        panel.grid.minor = element_line(colour = "grey90", linewidth = 0.3)
+    )
+
+# saved as pdf, mitostress_test_replot, portrait A4 size
+```

@@ -1,0 +1,2880 @@
+---
+title: "main_screen_v3"
+author: "CZJS"
+date: "2026-08-02"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+Alternative analysis pipeline:
+More LMs/GLMs, followed by AIC to find the right distribution, followed by ANOVA and Dunnett's test
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Working directory
+
+setwd("comp_bio/capture_c_adipocytes/main_screen/")
+
+# modify accordingly
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.width = 7,
+                      cache.lazy = FALSE,
+                      cache.path = ("cache/"),
+                      fig.path = ("cache/"))
+
+# Functions defined here
+# copied from https://rdrr.io/bioc/imageHTS/man/zprime.html
+
+zprime = function(a, b, method=c('mahalanobis', 'robust', 'fixsd', 'original')) {
+    method = match.arg(method)
+    
+    if (method=='mahalanobis') {
+        if (is.null(dim(a))) a = matrix(a, ncol=1)
+        if (is.null(dim(b))) b = matrix(b, ncol=1)
+        mua = apply(a, 2, mean)
+        mub = apply(b, 2, mean)
+        dm = try(mahalanobis(mua, mub, cov(a) + cov(b)))
+        if (class(dm)=='try-error') NA
+        else 1-3/sqrt(dm)
+    }
+    else {
+        if (method=='robust') 1-3*(mad(a)+mad(b))/abs(median(a)-median(b))
+        else if (method=='fixsd') 1-3*sqrt(var(a)+var(b))/abs(mean(a)-mean(b))
+        else 1-3*(sd(a)+sd(b))/abs(mean(a)-mean(b))
+    }
+}
+
+
+investigate_raw_maps <- function(to_plot, request){
+    request <- eval(request)
+    request <- quo_name(enquo(request))
+    
+    raw_map(data = to_plot[[request]], 
+            well = to_plot$WellName, 
+            plate = 96) + labs(title = request)
+}
+
+#source("../screening/catHeader.R")
+
+```
+
+
+Loading libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(FactoMineR)
+library(factoextra)
+library(Hmisc)
+library(bit64)
+library(NbClust)
+library(pheatmap)
+library(umap)
+library(platetools)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+
+```
+
+
+
+First, the count data such as spot count, nuclei count
+
+```{r countdata}
+
+
+### the data
+
+
+
+#spot count
+
+spot_count_df_extended <- data.frame(spot_count = final_plate_list$`Spots - Number of Objects`,
+                            knockdown = final_plate_list$Gene, plate = final_plate_list$plate, row = final_plate_list$Row, col = final_plate_list$Col) %>% 
+    dplyr::filter(knockdown != "Empty")
+
+
+
+
+
+###
+library(MASS)      # glm.nb
+library(stats)     # glm
+library(ggplot2)
+library(multcomp)  # glht / Dunnett
+library(gridExtra) # optional; remove if not installed
+
+fit_distribution_and_diagnostics <- function(df, yname, control_level="AAVS1") {
+  df <- df
+  df$knockdown <- relevel(factor(df$knockdown), ref = control_level)
+  df$plate <- factor(df$plate)
+  df$row   <- factor(df$row)
+  df$col   <- factor(df$col)
+
+  form <- as.formula(paste0(yname, " ~ knockdown + plate + row + col"))
+
+  # Poisson
+  fit_pois <- glm(form, data=df, family=poisson())
+
+  # Negative binomial
+  fit_nb <- glm.nb(form, data=df)
+
+  aic_tbl <- data.frame(
+    model = c("Poisson", "NegBin"),
+    AIC   = c(AIC(fit_pois), AIC(fit_nb))
+  )
+  aic_tbl <- aic_tbl[order(aic_tbl$AIC), ]
+
+  best_fit <- if (aic_tbl$model[1] == "Poisson") fit_pois else fit_nb
+  best_name <- aic_tbl$model[1]
+
+  list(
+    feature = yname,
+    fits = list(Poisson = fit_pois, NegBin = fit_nb),
+    aic = aic_tbl,
+    best_fit = best_fit,
+    best_name = best_name
+  )
+}
+
+
+plot_glm_diagnostics <- function(fit, title="") {
+  rp <- residuals(fit, type="pearson")
+  fv <- fitted(fit)
+
+  op <- par(mfrow=c(2,2))
+  plot(fv, rp, xlab="Fitted", ylab="Pearson residuals",
+       main=paste0("Residuals vs fitted: ", title))
+  abline(h=0, col="red")
+
+  qqnorm(rp, main=paste0("QQ of Pearson residuals: ", title))
+  qqline(rp, col="red")
+
+  plot(fv, sqrt(abs(rp)), xlab="Fitted", ylab="sqrt(|Pearson residuals|)",
+       main=paste0("Scale check: ", title))
+
+  plot(cooks.distance(fit), type="h",
+       main=paste0("Cook's distance: ", title),
+       ylab="Cook's D")
+  par(op)
+}
+
+
+
+###
+
+count_features <- c("spot_count")
+
+results <- vector("list", length(count_features))
+names(results) <- count_features
+
+for (f in count_features) {
+  cat("\n--- Feature:", f, "---\n")
+
+  res <- fit_distribution_and_diagnostics(spot_count_df_extended, f, control_level="AAVS1")
+  print(res$aic)
+
+  plot_glm_diagnostics(res$best_fit, title=paste0(f, " (", res$best_name, ")"))
+
+  results[[f]] <- res
+}
+
+
+ggplot(spot_count_df_extended, aes(x = spot_count, y = knockdown)) + geom_violin()
+
+
+
+
+```
+
+
+chat the plots are not looking good...
+
+
+```{r dharma}
+library(DHARMa)
+sim <- simulateResiduals(fit_nb, n = 1000)
+plot(sim)
+testDispersion(sim)
+testUniformity(sim)
+
+
+
+fit_nb_A <- glm.nb(
+  spot_count ~ knockdown + plate + plate:row + plate:col,
+  data = spot_count_df_extended
+)
+
+simA <- simulateResiduals(fit_nb_A, n=1000)
+plot(simA); testDispersion(simA); testZeroInflation(simA); testOutliers(simA)
+
+
+library(DHARMa)
+
+sim <- simulateResiduals(fit_nb, n = 1000)
+# DHARMa uses scaled residuals; outliers correspond to extremes of scaled residuals
+scaled <- sim$scaledResiduals
+
+df_check <- cbind(spot_count_df_extended, scaled_resid = scaled)
+
+# Look at the most extreme residuals
+idx <- order(abs(df_check$scaled_resid - 0.5), decreasing = TRUE)
+head(df_check[idx, c("knockdown","plate","row","col","spot_count","scaled_resid")], 20)
+
+boxplot(scaled_resid ~ knockdown, data=df_check, las=2)
+boxplot(scaled_resid ~ plate, data=df_check, las=2)
+
+
+df_chk <- transform(spot_count_df_extended,
+                    scaledResidual = sim$scaledResiduals)
+
+idx_low  <- df_chk$scaledResidual < 0.01
+idx_high <- df_chk$scaledResidual > 0.99
+
+table(df_chk$plate[idx_low], useNA="ifany")
+table(df_chk$plate[idx_high], useNA="ifany")
+
+table(df_chk$knockdown[idx_low], useNA="ifany")
+table(df_chk$knockdown[idx_high], useNA="ifany")
+
+
+fit_nb_B <- glm.nb(
+  spot_count ~ knockdown + plate + plate:row + plate:col + knockdown:plate,
+  data = spot_count_df_extended
+)
+simB <- simulateResiduals(fit_nb_B, n=1000)
+testUniformity(simB); testDispersion(simB); testOutliers(simB)
+
+
+fit_nb_interact <- glm.nb(
+  spot_count ~ knockdown + plate + plate:row + plate:col +
+    knockdown:row + knockdown:col,
+  data = spot_count_df_extended
+)
+simX <- simulateResiduals(fit_nb_interact, n=1000)
+testUniformity(simX); testDispersion(simX); testOutliers(simX)
+
+
+
+fit_nb_kp <- glm.nb(
+  spot_count ~ knockdown * plate + plate:row + plate:col +
+    knockdown:row + knockdown:col,
+  data = spot_count_df_extended
+)
+simX <- simulateResiduals(fit_nb_kp, n=1000)
+testUniformity(simX); testDispersion(simX); testOutliers(simX)
+
+library(glmmTMB)
+
+df <- spot_count_df_extended
+df$knockdown <- factor(df$knockdown)
+df$plate <- factor(df$plate)
+df$row <- factor(df$row)
+df$col <- factor(df$col)
+
+# set control reference
+df$knockdown <- relevel(df$knockdown, ref = "AAVS1")
+
+# Candidate 1: nbinom2
+fit_nb2 <- glmmTMB(
+  spot_count ~ knockdown + row + col + (1|plate),
+  data = df,
+  family = nbinom2()
+)
+
+# Candidate 2: nbinom1
+fit_nb1 <- glmmTMB(
+  spot_count ~ knockdown + row + col + (1|plate),
+  data = df,
+  family = nbinom1()
+)
+
+AIC(fit_nb2, fit_nb1)
+
+
+
+best_fit <- fit_nb2  # replace with whichever AIC prefers
+
+sim <- simulateResiduals(best_fit, n = 2000)
+plot(sim)
+testUniformity(sim)   # KS-type check
+testDispersion(sim)
+testOutliers(sim)
+
+
+library(glmmTMB)
+
+df <- spot_count_df_extended
+
+df$knockdown <- relevel(factor(df$knockdown), ref = "AAVS1")
+df$plate <- factor(df$plate)
+
+# if your numeric row/col columns already exist, use them directly
+df$row_num <- scale(df$row)   # replace with your numeric column if already numeric
+df$col_num <- scale(df$col)
+
+m_nb2 <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num + (1 | plate),
+  data = df,
+  family = nbinom2()
+)
+
+m_nb1 <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num + (1 | plate),
+  data = df,
+  family = nbinom1()
+)
+
+# check convergence
+m_nb2$fit$convergence
+m_nb1$fit$convergence
+
+m_nb2_quad <- update(m_nb2, . ~ . + I(row_num^2) + I(col_num^2))
+m_nb2_quad$fit$convergence
+
+
+m_nb2_rs <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num +
+    (1 + row_num + col_num | plate),
+  data = df,
+  family = nbinom2()
+)
+
+
+sim <- simulateResiduals(m_nb2_rs, n = 2000)
+plot(sim)
+testUniformity(sim)   # KS-type check
+testDispersion(sim)
+testOutliers(sim)
+
+logLik(m_nb2)
+logLik(m_nb1)
+
+library(emmeans)
+
+emm <- emmeans(m_nb2, ~ knockdown, type = "response")
+
+contr <- contrast(
+  emm,
+  method = "trt.vs.ctrl",
+  ref = "AAVS1",
+  adjust = "dunnett"
+)
+
+hm <- summary(contr, infer = TRUE)
+###
+
+
+fit_q <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num +
+    I(row_num^2) + I(col_num^2) +
+    (1 | plate),
+  data = df, family = nbinom2()
+)
+
+
+sim <- simulateResiduals(fit_rs, n = 2000)
+plot(sim)
+testUniformity(sim)   # KS-type check
+testDispersion(sim)
+testOutliers(sim)
+
+
+
+
+fit_rs <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num +
+    I(row_num^2) + I(col_num^2) +
+    (1 + row_num + col_num | plate),
+  data = df, family = nbinom2()
+)
+# looks better???
+
+
+df$layout_block <- factor(((as.integer(df$plate) - 1) %/% 3) +1)
+
+fit_lb <- glmmTMB(
+  spot_count ~ knockdown + layout_block +
+    row_num + col_num +
+    I(row_num^2) + I(col_num^2) +
+    (1 | plate),
+  data = df, family = nbinom2()
+)
+
+fit_lb_int <- glmmTMB(
+  spot_count ~ knockdown + layout_block +
+    (row_num + col_num + I(row_num^2) + I(col_num^2)) : layout_block +
+    (1 | plate),
+  data = df, family = nbinom2()
+)
+
+library(DHARMa)
+
+sim <- simulateResiduals(fit_rs, n = 2000)
+scaled <- sim$scaledResiduals
+
+# “Extreme” heuristic thresholds; you can adjust to 0.01/0.05 as desired
+out_idx <- which(scaled < 0.01 | scaled > 0.99)
+
+out_table <- cbind(spot_count_df_extended[out_idx, ],
+                    scaledResidual = scaled[out_idx])
+
+out_table[, c("knockdown","plate","row","col","spot_count","scaledResidual")]
+
+library(glmmTMB)
+library(DHARMa)
+
+df2 <- subset(df, plate != "1")  # adjust if your plate levels are like "P1"
+fit_noP1 <- glmmTMB(
+  spot_count ~ knockdown + row_num + col_num + (1 + row_num + col_num | plate),
+  data = df2,
+  family = nbinom2()
+)
+
+sim <- simulateResiduals(fit_noP1, n = 2000)
+testUniformity(sim); testDispersion(sim); testOutliers(sim)
+plot(sim)
+
+# If row and col are currently numeric-like strings:
+df$row_num <- as.numeric(as.character(df$row))
+df$col_num <- as.numeric(as.character(df$col))
+
+# then optionally scale for stability:
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+```
+
+
+```{r bigcheck}
+
+
+library(glmmTMB)
+library(MASS)
+library(DHARMa)
+
+#-----------------------------
+# User settings
+#-----------------------------
+df <- spot_count_df_extended  # <-- change if needed
+y  <- "spot_count"
+control_level <- "AAVS1"
+
+# Ensure types
+df$knockdown <- relevel(factor(df$knockdown), ref = control_level)
+df$plate <- factor(df$plate)
+
+
+# Quadrant blocks
+
+# Make sure plate is character
+df$plate <- as.character(df$plate)
+
+# Extract numeric plate index from "P1_SIMA_V5.txt", "P10_SIMA_V5.txt", etc.
+plate_num <- as.integer(sub("^P([0-9]+)_.*$", "\\1", df$plate))
+
+# Create layout blocks of 3 plates: (P1-P3)->1, (P4-P6)->2, ...
+df$layout_block <- factor((plate_num - 1) %/% 3 + 1)
+
+
+if (!("layout_block" %in% names(df))) df$layout_block <- factor(df$layout_block)
+
+# If row and col are currently numeric-like strings:
+df$row_num <- as.numeric(as.character(df$row))
+df$col_num <- as.numeric(as.character(df$col))
+
+# then optionally scale for stability:
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+
+# (If you already have scaled columns, adjust names accordingly.)
+if (!("row_sc" %in% names(df))) df$row_sc <- as.numeric(scale(as.numeric(df$row_num)))
+if (!("col_sc" %in% names(df))) df$col_sc <- as.numeric(scale(as.numeric(df$col_num)))
+
+# Helper to safely fit models
+fit_safe <- function(expr) {
+  tryCatch(expr, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+# Helper to safely compute AIC
+aic_safe <- function(model) {
+  if (is.null(model)) return(NA_real_)
+  a <- tryCatch(AIC(model), error = function(e) NA_real_)
+  as.numeric(a)
+}
+
+# Helper to DHARMa + p-values
+dharma_safe <- function(model, n = 2000, plot = TRUE) {
+  if (is.null(model)) return(list(sim = NULL, p = c(KS = NA, Disp = NA, Out = NA)))
+  sim <- simulateResiduals(model, n = n)
+  if (plot) plot(sim)
+  pKS   <- suppressMessages(testUniformity(sim)$p.value)
+  pDisp <- suppressMessages(testDispersion(sim)$p.value)
+  pOut  <- suppressMessages(testOutliers(sim)$p.value)
+  list(sim = sim, p = c(KS = pKS, Disp = pDisp, Out = pOut))
+}
+
+#-----------------------------
+# Candidate model ladder
+#-----------------------------
+models <- list(
+  # Gaussian (lm) increasing complexity
+  m1_lm_knockdown = function() {
+    lm(as.formula(paste0(y, " ~ knockdown")), data = df)
+  },
+
+  m2_lm_knock_plate = function() {
+    lm(as.formula(paste0(y, " ~ knockdown + plate")), data = df)
+  },
+
+  m3_lm_knock_plate_space = function() {
+    lm(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+  },
+
+  # NB GLM (MASS::glm.nb) - fixed effects only
+  m4_glmnb_basic = function() {
+    glm.nb(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+  },
+
+  m5_glmnb_quadratic = function() {
+    glm.nb(
+      as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc +
+                         I(row_sc^2) + I(col_sc^2)")),
+      data = df
+    )
+  },
+
+  # NB GLMM (glmmTMB) - random plate intercept
+  m6_glmm_nb_intercept = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc + (1|plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  m7_glmm_nb_intercept_quadratic = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc +
+                         I(row_sc^2) + I(col_sc^2) + (1|plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  # More complicated random slopes within plate (often helps “snaking”)
+  m8_glmm_nb_random_slopes = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc + (1 + row_sc + col_sc | plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  m9_glmm_nb_random_slopes_quadratic = function() {
+    glmmTMB(
+      as.formula(paste0(
+        y,
+        " ~ knockdown + row_sc + col_sc +
+          I(row_sc^2) + I(col_sc^2) +
+          (1 + row_sc + col_sc | plate)"
+      )),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  # Optional: include layout_block fixed effect (only if layout_block is meaningful)
+  m10_glmm_nb_layout_block = function() {
+    glmmTMB(
+      as.formula(paste0(
+        y,
+        " ~ knockdown + layout_block + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1|plate)"
+      )),
+      data = df,
+      family = nbinom2()
+    )
+  }
+)
+
+#-----------------------------
+# Fit, AIC, DHARMa
+#-----------------------------
+run_models <- function(models, dharma_n = 2000, make_plots = TRUE) {
+  out <- list()
+  summary_rows <- list()
+
+  for (nm in names(models)) {
+    message("\n==== Fitting: ", nm, " ====")
+    fit <- fit_safe(models[[nm]]())
+
+    aic <- aic_safe(fit)
+
+    dh <- dharma_safe(fit, n = dharma_n, plot = make_plots)
+
+    summary_rows[[nm]] <- data.frame(
+      model = nm,
+      AIC = aic,
+      KS_p = dh$p["KS"],
+      Disp_p = dh$p["Disp"],
+      Out_p = dh$p["Out"],
+      stringsAsFactors = FALSE
+    )
+
+    out[[nm]] <- list(fit = fit, dh = dh, AIC = aic)
+  }
+
+  summary_df <- do.call(rbind, summary_rows)
+  summary_df <- summary_df[order(summary_df$AIC), ]
+
+  list(all = out, summary = summary_df)
+}
+
+# Run it (set make_plots=FALSE if you only want AIC/p-values)
+res <- run_models(models, dharma_n = 2000, make_plots = TRUE)
+
+# View ranking by AIC
+res$summary
+
+
+res_table <- res$summary
+
+### Seems like the best one is m3, a gaussian model rip
+
+
+model_name <- "m3_lm_knock_plate_space"  # pick one from names(res$all)
+
+fit <- res$all[[model_name]]$fit
+
+sim <- simulateResiduals(fit, n = 2000)
+plot(sim)                # QQ-style & residual checks
+testUniformity(sim)
+testDispersion(sim)
+testOutliers(sim)
+
+
+par(mfrow = c(2,2))
+plotResiduals(sim, form = ~ knockdown)
+plotResiduals(sim, form = ~ plate)
+plotResiduals(sim, form = ~ row_sc) # HMMM
+plotResiduals(sim, form = ~ col_sc)
+
+m1 <- lm(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+
+m2 <- lm(as.formula(paste0(y, " ~ knockdown + plate +
+           poly(row_sc, 2, raw=TRUE) +
+           poly(col_sc, 2, raw=TRUE)")),
+         data=df)
+
+anova(m1, m2)
+
+r2 <- simulateResiduals(m2, n = 1000)
+plotSimulatedResiduals(r2, residuals~df$row_sc)  # or use the usual DHARMa panels
+
+plotResiduals(r2, form = ~ row_sc) # much better...
+plotResiduals(r2, form = ~ col_sc) 
+
+
+df$knockdown <- factor(df$knockdown)
+df$plate <- factor(df$plate)
+df$row <- factor(df$row)
+df$col <- factor(df$col)
+
+
+
+m3 <- lm(as.formula(paste0(y, " ~ knockdown + factor(plate) + factor(row) + factor(col) ")), data=df)
+
+r3 <- simulateResiduals(m3, n = 1000)
+plotSimulatedResiduals(r3, residuals~df$row_sc)  # or use the usual DHARMa panels
+
+plotResiduals(r3, form = ~ row) # still pretty good
+plotResiduals(r3, form = ~ col) 
+plotResiduals(r3, form = ~ plate) 
+plotResiduals(r3, form = ~ knockdown) 
+
+
+
+testDispersion(m3)
+plot(r3)                # QQ-style & residual checks
+
+
+```
+
+
+```{r finalfits}
+
+
+
+
+
+
+fit_full <- lm(spot_count ~ knockdown + plate + row_sc + col_sc, data = df)
+fit_red  <- lm(spot_count ~ plate + row_sc + col_sc, data = df)
+
+anova(fit_red, fit_full)  # F-test for knockdown after adjustment
+
+
+library(emmeans)
+
+emm <- emmeans(fit_full, ~ knockdown)
+
+contr <- contrast(
+  emm,
+  method = "trt.vs.ctrl",
+  ref = "AAVS1",       # your control level
+  adjust = "dunnett"
+)
+
+summary(contr, infer = TRUE)
+
+dt_spot_count <- summary(contr, infer = TRUE)
+
+
+
+# Get a data frame with estimate + CI + p-values
+ds_emm <- summary(contr, infer = TRUE) %>%
+  as.data.frame() %>%
+  # emmeans often names columns like: contrast, estimate, SE, df, lower.CL, upper.CL, p.value
+  rename(
+    diff = estimate,
+    lwr.ci = lower.CL,
+    upr.ci = upper.CL,
+    pval = p.value
+  ) %>%
+  # make sure we have a "contrast" column
+  mutate(contrast = as.character(contrast))
+
+# plotting
+
+ds_emm_plot <- ds_emm %>%
+  #extract group and control from "contrast" assuming it contains " - "
+  mutate(
+    group = str_split_fixed(contrast, "-", 2)[,1],
+    control = str_split_fixed(contrast, "-", 2)[,2]
+  ) %>%
+  #order for plotting
+  arrange(diff) %>%
+  mutate(contrast = factor(contrast, levels = contrast)) %>%
+  mutate(sig = case_when(pval < 0.05 ~ "TRUE", TRUE ~ "FALSE"))
+
+ggplot(ds_emm_plot, aes(x = diff, y = contrast)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+  geom_point(aes(color = pval < 0.05), size = 2) +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+  labs(
+    x = paste0("Difference vs ", control_level, " (diff)"),
+    y = "",
+    color = "Significant",
+    title = "Dunnett (emmeans) estimates and 95% CI - Spot count"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+
+
+
+
+```
+
+
+```{r otherfeatures}
+
+
+library(glmmTMB)
+library(MASS)
+library(DHARMa)
+
+#-----------------------------
+# User settings
+#-----------------------------
+
+# df <- spot_area_df_extended <- data.frame(spot_area = final_plate_list$`Spots - Spot Area [px²] - Mean per Well`,
+#                             knockdown = final_plate_list$Gene, plate = final_plate_list$plate, row = final_plate_list$Row, col = final_plate_list$Col) %>%
+#     dplyr::filter(knockdown != "Empty")  # <-- change if needed
+# 
+
+df <- spot_area_df_extended <- data.frame(spot_area = all_plate_z_scores$`Spots - Spot Area [px²] - Median per Well_z_score`,
+                            knockdown = all_plate_z_scores$Gene, plate = all_plate_z_scores$plate, row = all_plate_z_scores$Row, col = all_plate_z_scores$Col) %>%
+    dplyr::filter(knockdown != "Empty")  # <-- change if needed
+
+# df <- spot_area_df_extended <- data.frame(spot_area = all_plate_effect_sizes_before_norm$`Spots - Spot Area [px²] - Median per Well_z_score`,
+#                             knockdown = all_plate_effect_sizes_before_norm$Gene, plate = all_plate_effect_sizes_before_norm$plate, row = all_plate_effect_sizes_before_norm$Row, col = all_plate_effect_sizes_before_norm$Col) %>% 
+#     dplyr::filter(knockdown != "Empty")  # <-- change if needed
+# 
+
+y  <- "spot_area"
+control_level <- "AAVS1"
+
+# Ensure types
+df$knockdown <- relevel(factor(df$knockdown), ref = control_level)
+df$plate <- factor(df$plate)
+
+
+# Quadrant blocks
+
+# Make sure plate is character
+df$plate <- as.character(df$plate)
+
+# Extract numeric plate index from "P1_SIMA_V5.txt", "P10_SIMA_V5.txt", etc.
+plate_num <- as.integer(sub("^P([0-9]+)_.*$", "\\1", df$plate))
+
+# Create layout blocks of 3 plates: (P1-P3)->1, (P4-P6)->2, ...
+df$layout_block <- factor((plate_num - 1) %/% 3 + 1)
+
+
+if (!("layout_block" %in% names(df))) df$layout_block <- factor(df$layout_block)
+
+# If row and col are currently numeric-like strings:
+df$row_num <- as.numeric(as.character(df$row))
+df$col_num <- as.numeric(as.character(df$col))
+
+# then optionally scale for stability:
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+
+# (If you already have scaled columns, adjust names accordingly.)
+if (!("row_sc" %in% names(df))) df$row_sc <- as.numeric(scale(as.numeric(df$row_num)))
+if (!("col_sc" %in% names(df))) df$col_sc <- as.numeric(scale(as.numeric(df$col_num)))
+
+# Helper to safely fit models
+fit_safe <- function(expr) {
+  tryCatch(expr, error = function(e) {
+    message("Model failed: ", conditionMessage(e))
+    return(NULL)
+  })
+}
+
+# Helper to safely compute AIC
+aic_safe <- function(model) {
+  if (is.null(model)) return(NA_real_)
+  a <- tryCatch(AIC(model), error = function(e) NA_real_)
+  as.numeric(a)
+}
+
+# Helper to DHARMa + p-values
+dharma_safe <- function(model, n = 2000, plot = TRUE) {
+  if (is.null(model)) return(list(sim = NULL, p = c(KS = NA, Disp = NA, Out = NA)))
+  sim <- simulateResiduals(model, n = n)
+  if (plot) plot(sim)
+  pKS   <- suppressMessages(testUniformity(sim)$p.value)
+  pDisp <- suppressMessages(testDispersion(sim)$p.value)
+  pOut  <- suppressMessages(testOutliers(sim)$p.value)
+  list(sim = sim, p = c(KS = pKS, Disp = pDisp, Out = pOut))
+}
+
+#-----------------------------
+# Candidate model ladder
+#-----------------------------
+models <- list(
+  # Gaussian (lm) increasing complexity
+  m1_lm_knockdown = function() {
+    lm(as.formula(paste0(y, " ~ knockdown")), data = df)
+  },
+
+  m2_lm_knock_plate = function() {
+    lm(as.formula(paste0(y, " ~ knockdown + plate")), data = df)
+  },
+
+  m3_lm_knock_plate_space = function() {
+    lm(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+  },
+
+  # NB GLM (MASS::glm.nb) - fixed effects only
+  m4_glmnb_basic = function() {
+    glm.nb(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+  },
+
+  m5_glmnb_quadratic = function() {
+    glm.nb(
+      as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc +
+                         I(row_sc^2) + I(col_sc^2)")),
+      data = df
+    )
+  },
+
+  # NB GLMM (glmmTMB) - random plate intercept
+  m6_glmm_nb_intercept = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc + (1|plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  m7_glmm_nb_intercept_quadratic = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc +
+                         I(row_sc^2) + I(col_sc^2) + (1|plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  # More complicated random slopes within plate (often helps “snaking”)
+  m8_glmm_nb_random_slopes = function() {
+    glmmTMB(
+      as.formula(paste0(y, " ~ knockdown + row_sc + col_sc + (1 + row_sc + col_sc | plate)")),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  m9_glmm_nb_random_slopes_quadratic = function() {
+    glmmTMB(
+      as.formula(paste0(
+        y,
+        " ~ knockdown + row_sc + col_sc +
+          I(row_sc^2) + I(col_sc^2) +
+          (1 + row_sc + col_sc | plate)"
+      )),
+      data = df,
+      family = nbinom2()
+    )
+  },
+
+  # Optional: include layout_block fixed effect (only if layout_block is meaningful)
+  m10_glmm_nb_layout_block = function() {
+    glmmTMB(
+      as.formula(paste0(
+        y,
+        " ~ knockdown + layout_block + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1|plate)"
+      )),
+      data = df,
+      family = nbinom2()
+    )
+  }
+)
+
+#-----------------------------
+# Fit, AIC, DHARMa
+#-----------------------------
+run_models <- function(models, dharma_n = 2000, make_plots = TRUE) {
+  out <- list()
+  summary_rows <- list()
+
+  for (nm in names(models)) {
+    message("\n==== Fitting: ", nm, " ====")
+    fit <- fit_safe(models[[nm]]())
+
+    aic <- aic_safe(fit)
+
+    dh <- dharma_safe(fit, n = dharma_n, plot = make_plots)
+
+    summary_rows[[nm]] <- data.frame(
+      model = nm,
+      AIC = aic,
+      KS_p = dh$p["KS"],
+      Disp_p = dh$p["Disp"],
+      Out_p = dh$p["Out"],
+      stringsAsFactors = FALSE
+    )
+
+    out[[nm]] <- list(fit = fit, dh = dh, AIC = aic)
+  }
+
+  summary_df <- do.call(rbind, summary_rows)
+  summary_df <- summary_df[order(summary_df$AIC), ]
+
+  list(all = out, summary = summary_df)
+}
+
+# Run it (set make_plots=FALSE if you only want AIC/p-values)
+res <- run_models(models, dharma_n = 2000, make_plots = TRUE)
+
+# View ranking by AIC
+res$summary
+
+
+res_table <- res$summary
+
+### Seems like the best one is m3, a gaussian model rip
+
+
+model_name <- "m3_lm_knock_plate_space"  # pick one from names(res$all)
+
+fit <- res$all[[model_name]]$fit
+
+sim <- simulateResiduals(fit, n = 2000)
+plot(sim)                # QQ-style & residual checks
+testUniformity(sim)
+testDispersion(sim)
+testOutliers(sim)
+
+
+cd <- cooks.distance(fit)
+idx <- which(cd > 4/length(cd))  # a common heuristic
+length(idx)
+head(idx)
+
+
+
+library(emmeans)
+
+emm <- emmeans(fit, ~ knockdown)
+
+contr <- contrast(
+  emm,
+  method = "trt.vs.ctrl",
+  ref = "AAVS1",       # your control level
+  adjust = "dunnett"
+)
+
+summary(contr, infer = TRUE)
+
+dt_spot_area <- summary(contr, infer = TRUE)
+
+
+
+# Get a data frame with estimate + CI + p-values
+ds_emm <- summary(contr, infer = TRUE) %>%
+  as.data.frame() %>%
+  # emmeans often names columns like: contrast, estimate, SE, df, lower.CL, upper.CL, p.value
+  rename(
+    diff = estimate,
+    lwr.ci = lower.CL,
+    upr.ci = upper.CL,
+    pval = p.value
+  ) %>%
+  # make sure we have a "contrast" column
+  mutate(contrast = as.character(contrast))
+
+# plotting
+
+ds_emm_plot <- ds_emm %>%
+  #extract group and control from "contrast" assuming it contains " - "
+  mutate(
+    group = str_split_fixed(contrast, "-", 2)[,1],
+    control = str_split_fixed(contrast, "-", 2)[,2]
+  ) %>%
+  #order for plotting
+  arrange(diff) %>%
+  mutate(contrast = factor(contrast, levels = contrast)) %>%
+  mutate(sig = case_when(pval < 0.05 ~ "TRUE", TRUE ~ "FALSE"))
+
+ggplot(ds_emm_plot, aes(x = diff, y = contrast)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_errorbarh(aes(xmin = lwr.ci, xmax = upr.ci), height = 0.25, color = "grey30") +
+  geom_point(aes(color = pval < 0.05), size = 2) +
+  scale_color_manual(values = c("FALSE" = "black", "TRUE" = "red")) +
+  labs(
+    x = paste0("Difference vs ", control_level, " (diff)"),
+    y = "",
+    color = "Significant",
+    title = "Dunnett (emmeans) estimates and 95% CI - Spot area"
+  ) +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 9))
+
+
+fit_log <- lm(log(spot_area) ~ knockdown + plate + row_sc + col_sc , data=df) 
+
+
+sim <- simulateResiduals(fit_log, n = 2000)
+plot(sim)                # QQ-style & residual checks
+testUniformity(sim)
+testDispersion(sim)
+testOutliers(sim)
+
+
+
+fit_log_link <- glm(spot_area ~ knockdown + plate + row_sc + col_sc, data=df, family = inverse.gaussian(link = "log"))
+fit_gamma_id <- update(fit_log_link, family = Gamma(link="identity"))
+fit_gamma_inv <- update(fit_log_link, family = Gamma(link="inverse"))
+
+
+scaled <- sim$scaledResiduals
+out_idx <- which(scaled < 0.01 | scaled > 0.99)  # “extreme” DHARMa outliers
+
+out_df <- df %>%
+  mutate(scaled_resid = scaled) %>%
+  slice(out_idx)
+
+# Summarize where the outliers are concentrated
+out_df %>%
+  count(plate, knockdown, sort = TRUE) %>%
+  head(20)
+
+out_df %>%
+  count(layout_block, sort = TRUE) %>%
+  head(20)
+
+# Optional: look at coordinate clustering
+out_df %>%
+  summarise(
+    row_sc_min=min(row_sc), row_sc_max=max(row_sc),
+    col_sc_min=min(col_sc), col_sc_max=max(col_sc),
+    n=n()
+  )
+
+library(glmmTMB)
+
+
+fit_gam_glmm <- glmmTMB(
+  spot_area ~ knockdown + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1 | plate),
+  data = df,
+  family = Gamma(link = "log")
+)
+
+fit_logn_glmm <- glmmTMB(
+  spot_area ~ knockdown + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1 | plate),
+  data = df,
+  family = lognormal()
+)
+
+fit_gam_disp_plate <- glmmTMB(
+  spot_area ~ knockdown + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1 | plate),
+  data = df,
+  family = Gamma(link="log"),
+  dispformula = ~ plate
+)
+
+fit_gam_disp_layout <- glmmTMB(
+  spot_area ~ knockdown + row_sc + col_sc + I(row_sc^2) + I(col_sc^2) + (1 | plate),
+  data = df,
+  family = Gamma(link="log"),
+  dispformula = ~ layout_block
+)
+
+fit_gamma_layout <- glmmTMB(
+  spot_area ~ knockdown + layout_block + row_sc + col_sc + I(row_sc^2) + I(col_sc^2),
+  data = df,
+  family = Gamma(link="log")
+)
+library(DHARMa)
+
+dharma_score <- function(fit, n=2000, quiet=TRUE) {
+  sim <- simulateResiduals(fit, n=n)
+  if (!quiet) plot(sim)
+  list(
+    KS = testUniformity(sim)$p.value,
+    Disp = testDispersion(sim)$p.value,
+    Out = testOutliers(sim)$p.value
+  )
+}
+
+fits <- list(
+  gam_glmm  = fit_gam_glmm,
+  logn_glmm = fit_logn_glmm,
+  gam_disp_plate = fit_gam_disp_plate,
+  gam_disp_layout = fit_gam_disp_layout,
+  gamma_layout = fit_gamma_layout
+)
+
+scores <- do.call(rbind, lapply(fits, function(f) {
+  s <- dharma_score(f, n=2000, quiet=TRUE)
+  data.frame(KS_p=s$KS, Disp_p=s$Disp, Out_p=s$Out)
+}))
+scores
+
+
+sim <- simulateResiduals(fit_gam_disp_layout, n = 2000)
+plot(sim)                # QQ-style & residual checks
+testUniformity(sim)
+testDispersion(sim)
+testOutliers(sim)
+
+
+
+# try 18/08/26
+
+m2_sa <- lm(as.formula(paste0(y, " ~ knockdown + plate +
+           poly(row_sc, 2, raw=TRUE) +
+           poly(col_sc, 2, raw=TRUE)")),
+         data=df)
+
+
+r2_sa <- simulateResiduals(m2_sa, n = 1000)
+
+plotSimulatedResiduals(r2_sa)  # or use the usual DHARMa panels
+
+r2_sa <- sim
+
+plotResiduals(r2_sa, form = ~ row_sc) # its fine
+plotResiduals(r2_sa, form = ~ col_sc) # a littttle bit of deviation but not too bad
+plotResiduals(r2_sa, form = ~ plate) # still pretty good
+plotResiduals(r2_sa, form = ~ knockdown) # good
+
+testDispersion(m2_sa)
+testSimulatedResiduals(r2_sa)
+plot(r2_sa)      
+plot(m2_sa)      
+
+testZeroInflation(r2_sa)
+
+# try 19/08/26
+
+hist(df$spot_area)
+
+# try 24/08/26
+
+m2_sa <- lm(as.formula(paste0(y, " ~ knockdown + plate + row_sc + col_sc")), data = df)
+
+r2_sa <- simulateResiduals(m2_sa, n = 1000)
+
+plotSimulatedResiduals(r2_sa)  # or use the usual DHARMa panels
+
+plotResiduals(r2_sa, form = ~ knockdown) # good
+
+m_int <- lm(spot_area ~ knockdown + plate +
+               poly(row_sc, 2, raw=TRUE) +
+               poly(col_sc, 2, raw=TRUE),
+            data=df)
+
+
+s_int <-  simulateResiduals(m_int, n = 1000)
+
+plot(s_int)
+```
+
+
+```{r nucleicount}
+
+df <- nuclei_count_df_extended <- data.frame(nuclei_count = final_plate_list$`Nuclei Selected Selected - Number of Objects`,
+                            knockdown = final_plate_list$Gene, plate = final_plate_list$plate, row = final_plate_list$Row, col = final_plate_list$Col) %>% 
+    dplyr::filter(knockdown != "Empty")
+
+y  <- "nuclei_count"
+control_level <- "AAVS1"
+
+# Ensure types
+df$knockdown <- relevel(factor(df$knockdown), ref = control_level)
+df$plate <- factor(df$plate)
+
+hist(df$nuclei_count)
+
+
+# If row and col are currently numeric-like strings:
+df$row_num <- as.numeric(as.character(df$row))
+df$col_num <- as.numeric(as.character(df$col))
+
+# then optionally scale for stability:
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+
+# (If you already have scaled columns, adjust names accordingly.)
+if (!("row_sc" %in% names(df))) df$row_sc <- as.numeric(scale(as.numeric(df$row_num)))
+if (!("col_sc" %in% names(df))) df$col_sc <- as.numeric(scale(as.numeric(df$col_num)))
+
+
+m2_nc <- lm(as.formula(paste0(y, " ~ knockdown + plate +
+           poly(row_sc, 2, raw=TRUE) +
+           poly(col_sc, 2, raw=TRUE)")),
+         data=df)
+
+
+
+r2_nc <- simulateResiduals(m2_nc, n = 1000)
+
+plot(r2_nc)  # or use the usual DHARMa panels
+plot(m2_nc)      
+
+plotResiduals(r2_nc, form = ~ row_sc) # its fine
+plotResiduals(r2_nc, form = ~ col_sc) # a littttle bit of deviation but not too bad
+plotResiduals(r2_nc, form = ~ plate) # still pretty good
+plotResiduals(r2_nc, form = ~ knockdown) # good
+
+testDispersion(m2_nc)
+testSimulatedResiduals(m2_nc)
+
+testZeroInflation(r2_nc)
+
+library(splines)
+
+m_area_or_nuc <- lm(as.formula(paste0(
+  y, "~ knockdown + plate +
+    bs(row_sc, df = 4) +
+    bs(col_sc, df = 8)")),
+  data = df
+)
+
+
+r_area_or_nuc <- simulateResiduals(m_area_or_nuc, n = 1000)
+
+plotSimulatedResiduals(r_area_or_nuc)  # or use the usual DHARMa panels
+
+
+
+plotResiduals(r_area_or_nuc, form = ~ row_sc) # its fine
+plotResiduals(r_area_or_nuc, form = ~ col_sc) # a littttle bit of deviation but not too bad
+plotResiduals(r_area_or_nuc, form = ~ plate) # still pretty good
+plotResiduals(r_area_or_nuc, form = ~ knockdown) # good
+
+
+m <- lm(as.formula(paste0(
+  y,"~ knockdown + plate +
+    poly(row_sc, 2, raw=TRUE) +
+    poly(col_sc, 2, raw=TRUE) +
+    poly(row_sc, 2, raw=TRUE):poly(col_sc, 2, raw=TRUE)")),
+  data = df
+)
+
+
+r<- simulateResiduals(m, n = 1000)
+
+plot(r)  # or use the usual DHARMa panels
+
+
+
+plotResiduals(r, form = ~ row_sc) # its fine
+plotResiduals(r, form = ~ col_sc) # a littttle bit of deviation but not too bad
+plotResiduals(r, form = ~ plate) # still pretty good
+plotResiduals(r, form = ~ knockdown) # good
+
+
+df$y_t <- log1p(df$nuclei_count)
+df$y_t <- log1p(df$spot_area)
+df$y_t <- log1p(df$spot_count)
+
+y <- "y_t"
+
+
+
+df$y_t <- log1p(df$nuclei_count)
+df$y_t <- sqrt(df$spot_area)
+df$y_t <- log1p(df$spot_count)
+
+```
+
+
+```{r }
+
+library(nlme)
+
+m_area_var <- nlme::gls(
+  spot_area ~ knockdown + plate +
+    poly(row_sc, 2, raw=TRUE) +
+    poly(col_sc, 2, raw=TRUE),
+  data = df,
+  weights = nlme::varIdent(form = ~ 1 | factor(col_sc)),
+  method = "REML"
+)
+
+
+r2_nc <- simulateResiduals(m_area_var, n = 1000)
+
+plot(r2_nc)  # or use the usual DHARMa panels
+plot(m2_nc)      
+
+plotResiduals(r2_nc, form = ~ row_sc) # its fine
+plotResiduals(r2_nc, form = ~ col_sc) # a littttle bit of deviation but not too bad
+plotResiduals(r2_nc, form = ~ plate) # still pretty good
+plotResiduals(r2_nc, form = ~ knockdown) # good
+
+testDispersion(m2_nc)
+testSimulatedResiduals(m2_nc)
+
+
+
+```
+
+
+### Detailed gpt response trial:
+
+```{r chathelp}
+# =========================================================
+# 1) Packages
+# =========================================================
+library(dplyr)
+library(purrr)
+library(tibble)
+library(ggplot2)
+library(glmmTMB)
+library(mgcv)
+library(DHARMa)
+library(emmeans)
+
+# =========================================================
+# 2) Data setup
+#    Replace the response column below if needed
+# =========================================================
+control_level <- "AAVS1"
+
+df <- tibble(
+  spot_area = final_plate_list$`Spots - Spot Area [px²] - Median per Well`,
+  knockdown = final_plate_list$Gene,
+  plate     = final_plate_list$plate,
+  row       = final_plate_list$Row,
+  col       = final_plate_list$Col
+) %>%
+  filter(knockdown != "Empty") %>%
+  mutate(
+    spot_area = as.numeric(spot_area),
+    knockdown = factor(knockdown),
+    plate     = factor(plate)
+  ) %>%
+  filter(
+    is.finite(spot_area),
+    !is.na(knockdown),
+    !is.na(plate),
+    !is.na(row),
+    !is.na(col)
+  )
+
+df$knockdown <- relevel(df$knockdown, ref = control_level)
+
+# Row / column as numeric
+row_chr <- as.character(df$row)
+row_num <- suppressWarnings(as.numeric(row_chr))
+if (all(is.na(row_num))) {
+  row_num <- match(row_chr, sort(unique(row_chr)))
+}
+df$row_num <- row_num
+df$col_num <- suppressWarnings(as.numeric(as.character(df$col)))
+
+# Scaled versions
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+
+# Optional layout blocks, if plate names contain P1, P2, ...
+plate_num <- suppressWarnings(as.integer(sub("^P([0-9]+)_.*$", "\\1", as.character(df$plate))))
+if (all(!is.na(plate_num))) {
+  df$layout_block <- factor((plate_num - 1L) %/% 3L + 1L)
+} else {
+  df$layout_block <- factor(df$plate)
+}
+
+# Positive-response check
+positive_response <- all(df$spot_area > 0, na.rm = TRUE)
+
+# Quick sanity checks
+summary(df$spot_area)
+table(df$plate) %>% head()
+
+hist(df$spot_area, breaks = 40, main = "Spot area", xlab = "spot_area")
+
+
+# =========================================================
+# 3) Helpers
+# =========================================================
+fit_safe <- function(fun) {
+  tryCatch(
+    fun(),
+    error = function(e) {
+      message("Model failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+}
+
+aic_safe <- function(fit) {
+  if (is.null(fit)) return(NA_real_)
+  tryCatch(as.numeric(AIC(fit)), error = function(e) NA_real_)
+}
+
+bic_safe <- function(fit) {
+  if (is.null(fit)) return(NA_real_)
+  tryCatch(as.numeric(BIC(fit)), error = function(e) NA_real_)
+}
+
+logLik_safe <- function(fit) {
+  if (is.null(fit)) return(NA_real_)
+  tryCatch(as.numeric(logLik(fit)), error = function(e) NA_real_)
+}
+
+converged_safe <- function(fit) {
+  if (is.null(fit)) return(FALSE)
+
+  if (inherits(fit, "glmmTMB")) {
+    return(isTRUE(fit$sdr$pdHess))
+  }
+
+  if (inherits(fit, "gam")) {
+    return(isTRUE(fit$converged))
+  }
+
+  TRUE
+}
+
+dharma_safe <- function(fit, n = 1000, plot = FALSE) {
+  if (is.null(fit)) {
+    return(list(sim = NULL, p = c(KS = NA_real_, Disp = NA_real_, Out = NA_real_)))
+  }
+
+  sim <- tryCatch(
+    simulateResiduals(fit, n = n),
+    error = function(e) {
+      message("DHARMa failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (is.null(sim)) {
+    return(list(sim = NULL, p = c(KS = NA_real_, Disp = NA_real_, Out = NA_real_)))
+  }
+
+  if (plot) plot(sim)
+
+  pvals <- c(
+    KS   = tryCatch(testUniformity(sim)$p.value, error = function(e) NA_real_),
+    Disp = tryCatch(testDispersion(sim)$p.value, error = function(e) NA_real_),
+    Out  = tryCatch(testOutliers(sim)$p.value, error = function(e) NA_real_)
+  )
+
+  list(sim = sim, p = pvals)
+}
+
+run_models <- function(model_specs, data, dharma_n = 1000, make_plots = FALSE) {
+  results <- list()
+  rows <- list()
+
+  for (nm in names(model_specs)) {
+    message("\n==== Fitting ", nm, " ====")
+
+    fit <- fit_safe(function() model_specs[[nm]]$fit(data))
+    dh  <- dharma_safe(fit, n = dharma_n, plot = make_plots)
+
+    results[[nm]] <- list(
+      fit = fit,
+      dh  = dh
+    )
+
+    rows[[nm]] <- tibble(
+      model        = nm,
+      scale_group  = model_specs[[nm]]$scale_group,
+      converged    = converged_safe(fit),
+      AIC          = aic_safe(fit),
+      BIC          = bic_safe(fit),
+      logLik       = logLik_safe(fit),
+      KS_p         = dh$p["KS"],
+      Disp_p       = dh$p["Disp"],
+      Out_p        = dh$p["Out"],
+      dharma_fail_n = sum(dh$p < 0.05, na.rm = TRUE)
+    )
+  }
+
+  summary_df <- bind_rows(rows) %>%
+    arrange(scale_group, dharma_fail_n, AIC)
+
+  list(results = results, summary = summary_df)
+}
+
+# =========================================================
+# 4) Candidate models
+#
+# NOTE:
+# - Compare AIC within the same `scale_group`
+# - Do NOT compare raw-scale AIC to log-scale AIC directly
+# =========================================================
+model_specs <- list(
+
+  # -------------------------
+  # RAW-SCALE GAUSSIAN
+  # -------------------------
+  lm_raw_basic = list(
+    scale_group = "raw",
+    fit = function(data) {
+      lm(spot_area ~ knockdown, data = data)
+    }
+  ),
+
+  lm_raw_plate = list(
+    scale_group = "raw",
+    fit = function(data) {
+      lm(spot_area ~ knockdown + plate, data = data)
+    }
+  ),
+
+  lm_raw_polypos = list(
+    scale_group = "raw",
+    fit = function(data) {
+      lm(
+        spot_area ~ knockdown + plate +
+          poly(row_sc, 2, raw = TRUE) +
+          poly(col_sc, 2, raw = TRUE),
+        data = data
+      )
+    }
+  ),
+
+  gauss_glmm_re_plate = list(
+    scale_group = "raw",
+    fit = function(data) {
+      glmmTMB(
+        spot_area ~ knockdown +
+          poly(row_sc, 2, raw = TRUE) +
+          poly(col_sc, 2, raw = TRUE) +
+          (1 | plate),
+        family = gaussian(),
+        data = data
+      )
+    }
+  ),
+
+  gauss_glmm_het_plate = list(
+    scale_group = "raw",
+    fit = function(data) {
+      glmmTMB(
+        spot_area ~ knockdown +
+          poly(row_sc, 2, raw = TRUE) +
+          poly(col_sc, 2, raw = TRUE) +
+          (1 | plate),
+        family = gaussian(),
+        dispformula = ~ plate,
+        data = data
+      )
+    }
+  ),
+
+  gam_raw_2d = list(
+    scale_group = "raw",
+    fit = function(data) {
+      gam(
+        spot_area ~ knockdown +
+          s(plate, bs = "re") +
+          te(row_num, col_num, k = c(4, 5)),
+        data = data,
+        method = "REML"
+      )
+    }
+  )
+)
+
+if (positive_response) {
+  model_specs <- c(model_specs, list(
+
+    # -------------------------
+    # LOG-SCALE GAUSSIAN
+    # -------------------------
+    lm_log_polypos = list(
+      scale_group = "log",
+      fit = function(data) {
+        lm(
+          log(spot_area) ~ knockdown + plate +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE),
+          data = data
+        )
+      }
+    ),
+
+    log_gauss_glmm_re_plate = list(
+      scale_group = "log",
+      fit = function(data) {
+        glmmTMB(
+          log(spot_area) ~ knockdown +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE) +
+            (1 | plate),
+          family = gaussian(),
+          data = data
+        )
+      }
+    ),
+
+    gam_log_2d = list(
+      scale_group = "log",
+      fit = function(data) {
+        gam(
+          log(spot_area) ~ knockdown +
+            s(plate, bs = "re") +
+            te(row_num, col_num, k = c(4, 5)),
+          data = data,
+          method = "REML"
+        )
+      }
+    ),
+
+    # -------------------------
+    # POSITIVE RAW-SCALE FAMILIES
+    # -------------------------
+    gamma_glm_polypos = list(
+      scale_group = "raw",
+      fit = function(data) {
+        glm(
+          spot_area ~ knockdown + plate +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE),
+          family = Gamma(link = "log"),
+          data = data
+        )
+      }
+    ),
+
+    gamma_glmm_re_plate = list(
+      scale_group = "raw",
+      fit = function(data) {
+        glmmTMB(
+          spot_area ~ knockdown +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE) +
+            (1 | plate),
+          family = Gamma(link = "log"),
+          data = data
+        )
+      }
+    ),
+
+    gamma_glmm_het_plate = list(
+      scale_group = "raw",
+      fit = function(data) {
+        glmmTMB(
+          spot_area ~ knockdown +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE) +
+            (1 | plate),
+          family = Gamma(link = "log"),
+          dispformula = ~ plate,
+          data = data
+        )
+      }
+    ),
+
+    gamma_glmm_het_layout = list(
+      scale_group = "raw",
+      fit = function(data) {
+        glmmTMB(
+          spot_area ~ knockdown + layout_block +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE) +
+            (1 | plate),
+          family = Gamma(link = "log"),
+          dispformula = ~ layout_block,
+          data = data
+        )
+      }
+    ),
+
+    lognormal_glmm_re_plate = list(
+      scale_group = "raw",
+      fit = function(data) {
+        glmmTMB(
+          spot_area ~ knockdown +
+            poly(row_sc, 2, raw = TRUE) +
+            poly(col_sc, 2, raw = TRUE) +
+            (1 | plate),
+          family = lognormal(),
+          data = data
+        )
+      }
+    ),
+
+    gam_gamma_2d = list(
+      scale_group = "raw",
+      fit = function(data) {
+        gam(
+          spot_area ~ knockdown +
+            s(plate, bs = "re") +
+            te(row_num, col_num, k = c(4, 5)),
+          family = Gamma(link = "log"),
+          data = data,
+          method = "REML"
+        )
+      }
+    )
+  ))
+} else {
+  message("Non-positive values detected: skipping log/Gamma/lognormal models.")
+}
+
+# =========================================================
+# 5) Fit everything
+# =========================================================
+res <- run_models(
+  model_specs,
+  data = df,
+  dharma_n = 1000,
+  make_plots = FALSE
+)
+
+res$summary
+
+# =========================================================
+# 6) Inspect best candidates
+# =========================================================
+
+# Best raw-scale model
+best_raw_name <- res$summary %>%
+  filter(scale_group == "raw", converged) %>%
+  slice(1) %>%
+  pull(model)
+
+best_raw_name
+
+best_raw_fit <- res$results[[best_raw_name]]$fit
+best_raw_sim <- simulateResiduals(best_raw_fit, n = 2000)
+
+plot(best_raw_sim)
+testUniformity(best_raw_sim)
+testDispersion(best_raw_sim)
+testOutliers(best_raw_sim)
+
+plotResiduals(best_raw_sim, form = df$row_num, main = "Residuals vs row")
+plotResiduals(best_raw_sim, form = df$col_num, main = "Residuals vs col")
+plotResiduals(best_raw_sim, form = df$plate,   main = "Residuals vs plate")
+
+# Optional: best log-scale model
+best_log_name <- res$summary %>%
+  filter(scale_group == "log", converged) %>%
+  slice(1) %>%
+  pull(model)
+
+best_log_name
+
+if (length(best_log_name) == 1) {
+  best_log_fit <- res$results[[best_log_name]]$fit
+  best_log_sim <- simulateResiduals(best_log_fit, n = 2000)
+
+  plot(best_log_sim)
+  testUniformity(best_log_sim)
+  testDispersion(best_log_sim)
+  testOutliers(best_log_sim)
+}
+
+# =========================================================
+# 7) Post-hoc comparisons vs control
+#    Use a chosen final model
+# =========================================================
+
+
+# =========================================================
+# 8) Optional advanced models
+#    Only try these if residuals still show plate-specific
+#    row/column structure after the simpler models
+# =========================================================
+
+# Gaussian mixed model with plate-specific row/col slopes
+fit_gauss_slopes <- fit_safe(function() {
+  glmmTMB(
+    spot_area ~ knockdown +
+      poly(row_sc, 2, raw = TRUE) +
+      poly(col_sc, 2, raw = TRUE) +
+      (1 + row_sc + col_sc | plate),
+    family = gaussian(),
+    data = df
+  )
+})
+
+# Gamma mixed model with plate-specific row/col slopes
+fit_gamma_slopes <- if (positive_response) fit_safe(function() {
+  glmmTMB(
+    spot_area ~ knockdown +
+      poly(row_sc, 2, raw = TRUE) +
+      poly(col_sc, 2, raw = TRUE) +
+      (1 + row_sc + col_sc | plate),
+    family = Gamma(link = "log"),
+    data = df
+  )
+}) else NULL
+
+# Check if these help
+if (!is.null(fit_gauss_slopes)) {
+  sim_gauss_slopes <- simulateResiduals(fit_gauss_slopes, n = 1000)
+  plot(sim_gauss_slopes)
+}
+
+if (!is.null(fit_gamma_slopes)) {
+  sim_gamma_slopes <- simulateResiduals(fit_gamma_slopes, n = 1000)
+  plot(sim_gamma_slopes)
+}
+
+# =========================================================
+# 9) Even more advanced models
+#    Only try these if residuals still show plate-specific
+#    row/column structure after the simpler models
+# =========================================================
+df <- df %>%
+  mutate(
+    row_f = factor(row_num),
+    col_f = factor(col_num)
+  )
+
+
+extra_specs <- list(
+  log_gauss_glmm_het_plate = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log(spot_area) ~ knockdown +
+          poly(row_sc, 2, raw = TRUE) +
+          poly(col_sc, 2, raw = TRUE) +
+          (1 | plate),
+        dispformula = ~ plate,
+        family = gaussian(),
+        data = data
+      )
+    }
+  ),
+
+  lm_log_rowcol_factor = list(
+    scale_group = "log",
+    fit = function(data) {
+      lm(
+        log(spot_area) ~ knockdown + plate + row_f + col_f,
+        data = data
+      )
+    }
+  ),
+
+  log_gauss_glmm_plate_rowcol_re = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log(spot_area) ~ knockdown +
+          (1 | plate) +
+          (1 | plate:row_f) +
+          (1 | plate:col_f),
+        family = gaussian(),
+        data = data
+      )
+    }
+  ),
+
+  log_gauss_glmm_plate_rowcol_re_het = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log(spot_area) ~ knockdown +
+          (1 | plate) +
+          (1 | plate:row_f) +
+          (1 | plate:col_f),
+        dispformula = ~ plate,
+        family = gaussian(),
+        data = data
+      )
+    }
+  ),
+
+  lm_log_poly_interaction = list(
+    scale_group = "log",
+    fit = function(data) {
+      lm(
+        log(spot_area) ~ knockdown + plate +
+          poly(row_sc, 2, raw = TRUE) * poly(col_sc, 2, raw = TRUE),
+        data = data
+      )
+    }
+  )
+)
+
+# Optional Student-t model if available
+extra_specs$log_t_glmm_plate_rowcol_re <- list(
+  scale_group = "log",
+  fit = function(data) {
+    glmmTMB(
+      log(spot_area) ~ knockdown +
+        (1 | plate) +
+        (1 | plate:row_f) +
+        (1 | plate:col_f),
+      family = t_family(link = "identity"),
+      data = data
+    )
+  }
+)
+
+res_extra <- run_models(extra_specs, data = df, dharma_n = 1000, make_plots = FALSE)
+res_extra$summary
+
+df <- df %>%
+  mutate(
+    log_spot_area = log(spot_area),
+    row_f = factor(row_num),
+    col_f = factor(col_num)
+  )
+
+t_specs <- list(
+  t_plate_only = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log_spot_area ~ knockdown + (1 | plate),
+        family = t_family(link = "identity"),
+        data = data
+      )
+    }
+  ),
+
+  t_plate_poly = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log_spot_area ~ knockdown +
+          poly(row_sc, 2, raw = TRUE) +
+          poly(col_sc, 2, raw = TRUE) +
+          (1 | plate),
+        family = t_family(link = "identity"),
+        data = data
+      )
+    }
+  ),
+
+  t_plate_rowcol_re = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log_spot_area ~ knockdown +
+          (1 | plate) +
+          (1 | plate:row_f) +
+          (1 | plate:col_f),
+        family = t_family(link = "identity"),
+        data = data
+      )
+    }
+  ),
+
+  t_plate_rowcol_fixed = list(
+    scale_group = "log",
+    fit = function(data) {
+      glmmTMB(
+        log_spot_area ~ knockdown + plate + row_f + col_f,
+        family = t_family(link = "identity"),
+        data = data
+      )
+    }
+  )
+)
+
+res_t <- run_models(t_specs, data = df, dharma_n = 1000, make_plots = FALSE)
+res_t$summary
+```
+
+```{r finalmodels}
+# ==========================================
+# DHARMa diagnostics for final model
+# Assumes:
+#   m_final   = fitted glmmTMB model
+#   df_model  = data used to fit the model
+# with columns:
+#   log_spot_area, spot_area, knockdown, plate, row_num, col_num, row_f, col_f
+# ==========================================
+
+
+setwd("comp_bio/capture_c_adipocytes/main_screen/")
+
+library(tidyverse)
+library(data.table)
+library(Hmisc)
+library(bit64)
+library(NbClust)
+library(pheatmap)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(heatmaply)
+library(DHARMa)
+library(glmmTMB)
+library(mgcv)
+library(emmeans)
+
+quad_gene_key <- fread("Quad rearrangements.txt")
+
+quad_gene_key$Well <- str_replace_all(quad_gene_key$Well,"0(?=\\d)", "")
+
+plate_file_names <- list.files(pattern = "SIMA_V5", full.names = F)
+
+plates_list <- sapply(plate_file_names, fread, simplify = F, USE.NAMES = T)
+
+all_plates <- rbindlist(plates_list, idcol = "plate") %>%  #figured it out... the order of plates is not 1,2,3 but 1,10 etc
+    dplyr::select(-c("Number of Analyzed Fields", "Spots - Spot Area [px²] - Min per Well" )) #bc spot area min is all 1, scaling and centreing it makes NaN values
+
+p1_3 <- left_join(all_plates[all_plates$plate %in% c("P1_SIMA_V5.txt", "P2_SIMA_V5.txt", "P3_SIMA_V5.txt")], quad_gene_key[,c(1,2)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Original")
+p4_6 <- left_join(all_plates[all_plates$plate %in% c("P4_SIMA_V5.txt","P5_SIMA_V5.txt","P6_SIMA_V5.txt")], quad_gene_key[,c(1,3)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp1")
+p7_9 <- left_join(all_plates[all_plates$plate %in% c("P7_SIMA_V5.txt","P8_SIMA_V5.txt","P9_SIMA_V5.txt")], quad_gene_key[,c(1,4)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp2")
+p10_12 <- left_join(all_plates[all_plates$plate %in% c("P10_SIMA_V5.txt","P11_SIMA_V5.txt","P12_SIMA_V5.txt")], quad_gene_key[,c(1,5)], by = c("WellName" = "Well")) %>% 
+    dplyr::rename("Gene" = "Stamp3")
+
+final_plate_list <- bind_rows(p1_3, p4_6, p7_9, p10_12)
+
+
+# 
+# df <- spot_area_df_extended <- data.frame(spot_area = final_plate_list$`Spots - Spot Area [px²] - Mean per Well`,
+#                             knockdown = final_plate_list$Gene, plate = final_plate_list$plate, row = final_plate_list$Row, col = final_plate_list$Col) %>%
+#     dplyr::filter(knockdown != "Empty")  # <-- change if needed
+
+df <- spot_area_df_extended <- data.frame(spot_area = final_plate_list$`Spots - Spot Area [px²] - Median per Well`,
+                            knockdown = final_plate_list$Gene, plate = final_plate_list$plate, row = final_plate_list$Row, col = final_plate_list$Col) %>%
+    dplyr::filter(knockdown != "Empty")  # <-- change if needed
+
+
+
+# df <- spot_area_df_extended <- data.frame(spot_area = all_plate_z_scores$`Spots - Spot Area [px²] - Median per Well_z_score`,
+#                             knockdown = all_plate_z_scores$Gene, plate = all_plate_z_scores$plate, row = all_plate_z_scores$Row, col = all_plate_z_scores$Col) %>%
+#     dplyr::filter(knockdown != "Empty")  # <-- change if needed
+
+
+y  <- "spot_area"
+control_level <- "AAVS1"
+
+# Ensure types
+df$knockdown <- relevel(factor(df$knockdown), ref = control_level)
+df$plate <- factor(df$plate)
+
+
+# Quadrant blocks
+
+# Make sure plate is character
+df$plate <- as.character(df$plate)
+
+# Extract numeric plate index from "P1_SIMA_V5.txt", "P10_SIMA_V5.txt", etc.
+plate_num <- as.integer(sub("^P([0-9]+)_.*$", "\\1", df$plate))
+
+# Create layout blocks of 3 plates: (P1-P3)->1, (P4-P6)->2, ...
+df$layout_block <- factor((plate_num - 1) %/% 3 + 1)
+
+
+if (!("layout_block" %in% names(df))) df$layout_block <- factor(df$layout_block)
+
+# If row and col are currently numeric-like strings:
+df$row_num <- as.numeric(as.character(df$row))
+df$col_num <- as.numeric(as.character(df$col))
+
+# then optionally scale for stability:
+df$row_sc <- as.numeric(scale(df$row_num))
+df$col_sc <- as.numeric(scale(df$col_num))
+
+# (If you already have scaled columns, adjust names accordingly.)
+if (!("row_sc" %in% names(df))) df$row_sc <- as.numeric(scale(as.numeric(df$row_num)))
+if (!("col_sc" %in% names(df))) df$col_sc <- as.numeric(scale(as.numeric(df$col_num)))
+
+
+
+set.seed(123)
+
+
+df <- df %>%
+  mutate(
+    log_spot_area = log(spot_area),
+    row_f = factor(row_num),
+    col_f = factor(col_num)
+  )
+
+# m_final <- glmmTMB(
+#   log_spot_area ~ knockdown + plate + row_f + col_f,
+#   family = t_family(link = "identity"),
+#   data = df
+# )
+
+# so that emmeans knows that its a log transformed model
+m_final <- glmmTMB(
+  log(spot_area) ~ knockdown + plate + row_f + col_f,
+  family = t_family(link = "identity"),
+  data = df
+)
+
+
+
+# Simulated residuals
+sim_final <- simulateResiduals(m_final, n = 2000)
+
+# ------------------------------
+# 1) Global DHARMa diagnostics
+# ------------------------------
+plot(sim_final)
+
+cat("\n--- DHARMa tests ---\n")
+print(testUniformity(sim_final))
+# save as pdf 7x5 inches QQplot_residuals_glmtbb
+
+print(testDispersion(sim_final))
+print(testOutliers(sim_final))
+
+# Optional omnibus test
+cat("\n--- Combined DHARMa test ---\n")
+print(testResiduals(sim_final))
+
+# ------------------------------
+# 2) Residuals vs fitted values
+# ------------------------------
+plotResiduals(sim_final, fitted(m_final),
+              main = "DHARMa residuals vs fitted values")
+
+# ------------------------------
+# 3) Residuals vs main predictors
+# ------------------------------
+plotResiduals(sim_final, form = df$row_num,
+              main = "DHARMa residuals vs row number")
+
+plotResiduals(sim_final, form = df$col_num,
+              main = "DHARMa residuals vs column number")
+
+plotResiduals(sim_final, form = df$row_f,
+              main = "DHARMa residuals vs row factor")
+
+plotResiduals(sim_final, form = df$col_f,
+              main = "DHARMa residuals vs column factor")
+
+plotResiduals(sim_final, form = df$plate,
+              main = "DHARMa residuals vs plate")
+
+# This can be busy if many genes, but still useful if you want to check
+# whether particular knockdowns are systematically misfit
+# plotResiduals(sim_final, form = df_model$knockdown,
+#               main = "DHARMa residuals vs knockdown")
+
+# ------------------------------
+# 4) Formal categorical tests
+# ------------------------------
+cat("\n--- Categorical residual tests ---\n")
+print(testCategorical(sim_final, catPred = df$row_f))
+print(testCategorical(sim_final, catPred = df$col_f))
+print(testCategorical(sim_final, catPred = df$plate))
+#print(testCategorical(sim_final, catPred = df$knockdown))
+
+# ------------------------------
+# 5) Create residual diagnostic data frame
+# ------------------------------
+diag_df <- df %>%
+  mutate(
+    fitted_log = predict(m_final, type = "response"),
+    fitted_raw = exp(fitted_log),
+    dharma_resid = sim_final$scaledResiduals
+  )
+
+# ------------------------------
+# 6) Spatial heatmap: average residual by well position
+#    Very useful for plate-based screens
+# ------------------------------
+p_heatmap <- diag_df %>%
+  group_by(row_num, col_num) %>%
+  summarise(mean_resid = mean(dharma_resid), n = n(), .groups = "drop") %>%
+  ggplot(aes(x = col_num, y = row_num, fill = mean_resid)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "#2166AC", mid = "white", high = "#B2182B",
+    midpoint = 0.5, limits = c(0, 1),
+    name = "Mean\nDHARMa residual"
+  ) +
+  scale_y_reverse() +
+  coord_equal() +
+  theme_minimal(base_size = 11) +
+  labs(
+    title = "Average DHARMa residual by plate position",
+    x = "Column",
+    y = "Row"
+  )
+
+print(p_heatmap)
+
+# ------------------------------
+# 7) Per-plate heatmaps
+#    Good for checking whether one or two plates are still problematic
+# ------------------------------
+p_heatmap_plate <- diag_df %>%
+  group_by(plate, row_num, col_num) %>%
+  summarise(mean_resid = mean(dharma_resid), .groups = "drop") %>%
+  ggplot(aes(x = col_num, y = row_num, fill = mean_resid)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(
+    low = "#2166AC", mid = "white", high = "#B2182B",
+    midpoint = 0.5, limits = c(0, 1),
+    name = "Mean\nDHARMa residual"
+  ) +
+  scale_y_reverse() +
+  coord_equal() +
+  facet_wrap(~ plate) +
+  theme_minimal(base_size = 10) +
+  labs(
+    title = "DHARMa residual heatmap by plate",
+    x = "Column",
+    y = "Row"
+  )
+
+print(p_heatmap_plate)
+
+# ------------------------------
+# 8) Residual distributions by row / col / plate
+# ------------------------------
+p_row_box <- ggplot(diag_df, aes(x = row_f, y = dharma_resid)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  theme_minimal(base_size = 11) +
+  labs(title = "DHARMa residuals by row", x = "Row", y = "Scaled residual")
+
+p_col_box <- ggplot(diag_df, aes(x = col_f, y = dharma_resid)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  theme_minimal(base_size = 11) +
+  labs(title = "DHARMa residuals by column", x = "Column", y = "Scaled residual")
+
+p_plate_box <- ggplot(diag_df, aes(x = plate, y = dharma_resid)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", colour = "grey50") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  labs(title = "DHARMa residuals by plate", x = "Plate", y = "Scaled residual")
+
+print(p_row_box)
+print(p_col_box)
+print(p_plate_box)
+
+# ------------------------------
+# 9) Extreme residual wells
+#    Helpful for finding segmentation / QC issues
+# ------------------------------
+extreme_wells <- diag_df %>%
+  filter(dharma_resid < 0.01 | dharma_resid > 0.99) %>%
+  arrange(dharma_resid)
+
+cat("\n--- Number of extreme wells ---\n")
+print(nrow(extreme_wells))
+
+cat("\n--- Top extreme wells ---\n")
+print(
+  extreme_wells %>%
+    select(plate, row_num, col_num, knockdown, spot_area, fitted_raw, dharma_resid) %>%
+    head(30)
+)
+
+cat("\n--- Extreme wells by plate ---\n")
+print(extreme_wells %>% dplyr::count(plate, sort = TRUE))
+
+cat("\n--- Extreme wells by row/col ---\n")
+print(extreme_wells %>% dplyr::count(row_num, col_num, sort = TRUE) %>% head(20))
+
+# ------------------------------
+# 10) Observed vs fitted
+# ------------------------------
+p_obs_fit_log <- ggplot(diag_df, aes(x = fitted_log, y = log_spot_area)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+  theme_minimal(base_size = 11) +
+  labs(
+    title = "Observed vs fitted on log scale",
+    x = "Fitted log spot area",
+    y = "Observed log spot area"
+  )
+
+p_obs_fit_raw <- ggplot(diag_df, aes(x = fitted_raw, y = spot_area)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+  theme_minimal(base_size = 11) +
+  labs(
+    title = "Observed vs fitted on raw scale",
+    x = "Fitted spot area",
+    y = "Observed spot area"
+  )
+
+print(p_obs_fit_log)
+print(p_obs_fit_raw)
+
+# ------------------------------
+# 11) Save key plots
+# ------------------------------
+# ggsave("DHARMa_global_plot.png", plot = recordPlot(), width = 7, height = 7, dpi = 300)
+# ggsave("DHARMa_heatmap_overall.png", p_heatmap, width = 6, height = 5, dpi = 300)
+# ggsave("DHARMa_heatmap_by_plate.png", p_heatmap_plate, width = 12, height = 8, dpi = 300)
+# ggsave("DHARMa_boxplot_row.png", p_row_box, width = 5, height = 4, dpi = 300)
+# ggsave("DHARMa_boxplot_col.png", p_col_box, width = 6, height = 4, dpi = 300)
+# ggsave("DHARMa_boxplot_plate.png", p_plate_box, width = 10, height = 4, dpi = 300)
+# ggsave("Observed_vs_fitted_log.png", p_obs_fit_log, width = 5, height = 4, dpi = 300)
+# ggsave("Observed_vs_fitted_raw.png", p_obs_fit_raw, width = 5, height = 4, dpi = 300)
+
+```
+
+
+```{r itworks}
+# ==========================================
+# Dunnett contrasts + CI plot + volcano plot
+# for final model:
+# m_final <- glmmTMB(
+#   log_spot_area ~ knockdown + plate + row_f + col_f,
+#   family = t_family(link = "identity"),
+#   data = df
+# )
+# ==========================================
+
+
+# Omnibus tests of the fixed effects in the final model
+# install.packages("car")  # If needed
+
+anova_tbl <- car::Anova(
+  m_final,
+  type = "II",
+  component = "cond"
+)
+
+print(anova_tbl)
+
+# Display just the overall knockdown test
+anova_tbl["knockdown", , drop = FALSE]
+
+
+control_level <- "AAVS1"
+
+# Build a smaller reference grid by treating plate/row/col as nuisance factors
+# If you want averaging to reflect observed frequencies, change wt.nuis to "proportional"
+rg <- ref_grid(
+  m_final, #m_final
+  nuisance = c("plate", "row_f", "col_f"),
+  wt.nuis = "equal" #"equal"
+)
+
+# Estimated marginal means for knockdown, averaged over nuisance factors
+emm <- emmeans(rg, ~ knockdown, type = 'response')
+
+#emm <- emmeans(m_final, 'knockdown', type = 'response')
+
+# Dunnett contrasts vs control
+ref_idx <- which(levels(df$knockdown) == control_level)
+
+contr <- contrast(
+  emm,
+  method = "trt.vs.ctrl",
+  ref = ref_idx,
+  adjust = "dunnett"
+)
+
+dunnett_tbl <- summary(contr, infer = TRUE) %>%
+  as.data.frame()
+
+# Standardise CI column names
+ci_low_name  <- intersect(c("lower.CL", "asymp.LCL"), names(dunnett_tbl))[1]
+ci_high_name <- intersect(c("upper.CL", "asymp.UCL"), names(dunnett_tbl))[1]
+
+if (is.na(ci_low_name) || is.na(ci_high_name)) {
+  stop("Could not find confidence interval columns in the emmeans output.")
+}
+
+names(dunnett_tbl)[names(dunnett_tbl) == "estimate"] <- "diff_log"
+names(dunnett_tbl)[names(dunnett_tbl) == ci_low_name] <- "lwr"
+names(dunnett_tbl)[names(dunnett_tbl) == ci_high_name] <- "upr"
+names(dunnett_tbl)[names(dunnett_tbl) == "p.value"] <- "padj"
+
+# Add fold-change and plotting columns
+dunnett_tbl <- dunnett_tbl %>%
+  mutate(
+    contrast = as.character(contrast),
+    gene = str_trim(sub(paste0("\\s*-\\s*", control_level, "$"), "", contrast)),
+    fold_change = exp(diff_log),
+    lwr_fc = exp(lwr),
+    upr_fc = exp(upr),
+    log2FC = diff_log / log(2),
+    neglog10_p = -log10(pmax(padj, .Machine$double.xmin)),
+    sig = padj < 0.05,
+    direction = case_when(
+      sig & log2FC > 0 ~ "Increase",
+      sig & log2FC < 0 ~ "Decrease",
+      TRUE ~ "Not significant"
+    )
+  )
+
+# Save results
+#write.csv(dunnett_tbl, "dunnett_AAVS1_vs_all_genes.csv", row.names = FALSE)
+
+print(head(dunnett_tbl))
+
+# -------------------------
+# Confidence interval plot
+# -------------------------
+ci_tbl <- dunnett_tbl %>%
+  arrange(fold_change) %>%
+  mutate(gene = factor(gene, levels = gene))
+
+p_ci <- ggplot(ci_tbl, aes(y = gene, x = fold_change, colour = direction)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50") +
+  geom_segment(
+    aes(x = lwr_fc, xend = upr_fc, y = gene, yend = gene),
+    linewidth = 0.5,
+    colour = "grey35"
+  ) +
+  geom_point(size = 2) +
+  scale_colour_manual(
+    values = c(
+      "Increase" = "#D55E00",
+      "Decrease" = "#0072B2",
+      "Not significant" = "black"
+    )
+  ) +
+  labs(
+    x = paste0("Fold-change vs ", control_level),
+    y = NULL,
+    colour = NULL,
+    title = paste0("Dunnett contrasts: ", control_level, " vs all knockdowns"),
+    subtitle = "Points are estimated fold-changes; horizontal lines are 95% confidence intervals"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.y = element_text(size = 7),
+    legend.position = "top"
+  )
+
+print(p_ci)
+
+# -------------------------
+# Volcano plot
+# -------------------------
+label_df <- dunnett_tbl %>%
+  filter(sig) %>%
+  arrange(padj) %>%
+  slice_head(n = 15)
+
+p_volcano <- ggplot(dunnett_tbl, aes(x = log2FC, y = neglog10_p, colour = direction)) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted", colour = "grey50") +
+  geom_point(size = 2, alpha = 0.85) +
+  scale_colour_manual(
+    values = c(
+      "Increase" = "#D55E00",
+      "Decrease" = "#0072B2",
+      "Not significant" = "grey40"
+    )
+  ) +
+  labs(
+    x = paste0("Log2 fold-change vs ", control_level),
+    y = expression(-log[10]("Dunnett-adjusted p-value")),
+    colour = NULL,
+    title = "Volcano plot: knockdowns vs control",
+    subtitle = "Student-t model on log-transformed spot area"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+
+# Add labels if ggrepel is available; otherwise use geom_text
+if (requireNamespace("ggrepel", quietly = TRUE)) {
+  p_volcano <- p_volcano +
+    ggrepel::geom_text_repel(
+      data = label_df,
+      aes(label = gene),
+      size = 3,
+      show.legend = FALSE,
+      max.overlaps = 50
+    )
+} else {
+  p_volcano <- p_volcano +
+    geom_text(
+      data = label_df,
+      aes(label = gene),
+      size = 3,
+      vjust = -0.5,
+      check_overlap = TRUE,
+      show.legend = FALSE
+    )
+}
+
+print(p_volcano)
+
+# -------------------------
+# Optional combined plot
+# -------------------------
+if (requireNamespace("patchwork", quietly = TRUE)) {
+  combined_plot <- p_volcano / p_ci +
+    patchwork::plot_layout(heights = c(1, 2))
+  print(combined_plot)
+}
+
+# -------------------------
+# Optional save
+# -------------------------
+# ggsave("spot_area_dunnett_CI_plot.png", p_ci, width = 9, height = max(6, 0.18 * nrow(ci_tbl)), dpi = 300)
+# ggsave("spot_area_dunnett_volcano_plot.png", p_volcano, width = 8, height = 6, dpi = 300)
+# 
+# if (exists("combined_plot")) {
+#   ggsave("spot_area_dunnett_combined_plot.png", combined_plot, width = 10, height = max(10, 0.18 * nrow(ci_tbl) + 4), dpi = 300)
+# }
+
+
+```
+
+
+```{r usingterminaldataframe}
+
+control_level <- "AAVS1"
+
+# Read results calculated in the working Conda environment
+dunnett_tbl <- read.csv(
+  "comp_bio/capture_c_adipocytes/main_screen/knockdown_vs_AAVS1.csv",
+  check.names = FALSE
+)
+
+# Locate confidence interval columns
+ci_low_name <- intersect(
+  c("lower.CL", "asymp.LCL"), names(dunnett_tbl)
+)
+ci_high_name <- intersect(
+  c("upper.CL", "asymp.UCL"), names(dunnett_tbl)
+)
+
+stopifnot(
+  length(ci_low_name) == 1,
+  length(ci_high_name) == 1,
+  all(c("contrast", "ratio", "p.value") %in% names(dunnett_tbl))
+)
+
+# Match the column names expected by your existing plotting code
+names(dunnett_tbl)[names(dunnett_tbl) == "ratio"] <- "fold_change"
+names(dunnett_tbl)[names(dunnett_tbl) == ci_low_name] <- "lwr_fc"
+names(dunnett_tbl)[names(dunnett_tbl) == ci_high_name] <- "upr_fc"
+names(dunnett_tbl)[names(dunnett_tbl) == "p.value"] <- "padj"
+
+dunnett_tbl <- dunnett_tbl %>%
+  mutate(
+    contrast = as.character(contrast),
+
+    # Handles labels such as "GENE / AAVS1" or "GENE - AAVS1"
+    gene = trimws(sub(
+      paste0("[[:space:]]+(/|-)[[:space:]]+", control_level, "$"),
+      "",
+      contrast
+    )),
+
+    # Recover log-scale columns for compatibility with your old table
+    diff_log = log(fold_change),
+    lwr = log(lwr_fc),
+    upr = log(upr_fc),
+
+    log2FC = log2(fold_change),
+    neglog10_p = -log10(pmax(padj, .Machine$double.xmin)),
+    sig = !is.na(padj) & padj < 0.05,
+
+    direction = case_when(
+      sig & log2FC > 0 ~ "Increase",
+      sig & log2FC < 0 ~ "Decrease",
+      TRUE ~ "Not significant"
+    )
+  )
+
+print(head(dunnett_tbl))
+
+
+# -------------------------
+# Confidence interval plot
+# -------------------------
+ci_tbl <- dunnett_tbl %>%
+  arrange(fold_change) %>%
+  mutate(gene = factor(gene, levels = gene))
+
+p_ci <- ggplot(ci_tbl, aes(y = gene, x = fold_change, colour = direction)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = "grey50") +
+  geom_segment(
+    aes(x = lwr_fc, xend = upr_fc, y = gene, yend = gene),
+    linewidth = 0.5,
+    colour = "grey35"
+  ) +
+  geom_point(size = 2) +
+  scale_colour_manual(
+    values = c(
+      "Increase" = "#B31B21",
+      "Decrease" = "#1465AC",
+      "Not significant" = "black"
+    )
+  ) +
+  labs(
+    x = paste0("Fold-change vs ", control_level),
+    y = NULL,
+    colour = NULL,
+    title = paste0("Knockdown effects on spot area relative to AAVS1"),
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.y = element_text(size = 10),
+    legend.text = element_text(size = 10),
+    legend.position = "top"
+  )
+
+print(p_ci)
+
+# save as pdf dunnetts_test_spot_area A4 size
+
+```
+
+
+```{r modelcompare}
+
+library(dplyr)
+library(tibble)
+library(glmmTMB)
+library(DHARMa)
+
+# ---------------------------------------------------------
+# 1) Use exactly the same observations for every model
+# ---------------------------------------------------------
+df_compare <- df %>%
+  filter(
+    is.finite(spot_area),
+    spot_area > 0,
+    !is.na(knockdown),
+    !is.na(plate),
+    is.finite(row_num),
+    is.finite(col_num)
+  ) %>%
+  mutate(
+    knockdown = factor(knockdown),
+    plate = factor(plate),
+    row_f = factor(row_num),
+    col_f = factor(col_num)
+  ) %>%
+  droplevels()
+
+df_compare$knockdown <- relevel(
+  df_compare$knockdown,
+  ref = "AAVS1"
+)
+
+# ---------------------------------------------------------
+# 2) Five candidate models
+# ---------------------------------------------------------
+models <- list(
+  M1_lm_basic = lm(
+    log(spot_area) ~ knockdown,
+    data = df_compare,
+    na.action = na.fail
+  ),
+
+  M2_lm_plate = lm(
+    log(spot_area) ~ knockdown + plate,
+    data = df_compare,
+    na.action = na.fail
+  ),
+
+  M3_lm_quadratic_position = lm(
+    log(spot_area) ~ knockdown + plate +
+      poly(row_num, 2, raw = TRUE) +
+      poly(col_num, 2, raw = TRUE),
+    data = df_compare,
+    na.action = na.fail
+  ),
+
+  M4_lm_rowcol_factors = lm(
+    log(spot_area) ~ knockdown + plate + row_f + col_f,
+    data = df_compare,
+    na.action = na.fail
+  ),
+
+  M5_t_final = glmmTMB(
+    log(spot_area) ~ knockdown + plate + row_f + col_f,
+    family = t_family(link = "identity"),
+    REML = FALSE,
+    data = df_compare,
+    na.action = na.fail
+  )
+)
+
+stopifnot(all(vapply(models, nobs, numeric(1)) == nrow(df_compare)))
+
+# ---------------------------------------------------------
+# 3) Convergence and DHARMa diagnostics
+# ---------------------------------------------------------
+fit_ok <- function(model) {
+  if (inherits(model, "glmmTMB")) {
+    return(
+      isTRUE(model$fit$convergence == 0) &&
+        isTRUE(model$sdr$pdHess)
+    )
+  }
+
+  # Flag rank-deficient LM fits for investigation
+  !anyNA(coef(model))
+}
+
+# A failed diagnostic is recorded as NA, with a message.
+safe_p <- function(test) {
+  tryCatch(
+    as.numeric(test()$p.value),
+    error = function(e) {
+      message("Diagnostic failed: ", conditionMessage(e))
+      NA_real_
+    }
+  )
+}
+
+diagnostics <- lapply(models, function(model) {
+  if (!fit_ok(model)) return(NULL)
+
+  tryCatch(
+    simulateResiduals(
+      fittedModel = model,
+      n = 2000,
+      refit = FALSE,
+      plot = FALSE,
+      seed = 123
+    ),
+    error = function(e) {
+      message("DHARMa simulation failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+})
+
+# ---------------------------------------------------------
+# 4) Comparison table
+# ---------------------------------------------------------
+comparison <- bind_rows(lapply(names(models), function(nm) {
+  fit <- models[[nm]]
+  sim <- diagnostics[[nm]]
+  ll <- logLik(fit)
+
+  tibble(
+    model = nm,
+    fit_ok = fit_ok(fit),
+    n = nobs(fit),
+    parameters = as.numeric(attr(ll, "df")),
+    AIC = as.numeric(AIC(fit)),
+    BIC = as.numeric(BIC(fit)),
+    uniformity_p = if (is.null(sim)) NA_real_ else
+      safe_p(function() testUniformity(sim, plot = FALSE)),
+    dispersion_p = if (is.null(sim)) NA_real_ else
+      safe_p(function() testDispersion(sim, plot = FALSE)),
+    outliers_p = if (is.null(sim)) NA_real_ else
+      safe_p(function() testOutliers(
+        sim,
+        type = "binomial",
+        plot = FALSE
+      ))
+  )
+}))
+
+# Calculate delta AIC only among valid fits with finite AIC.
+eligible <- with(comparison, fit_ok & is.finite(AIC))
+
+comparison$delta_AIC <- NA_real_
+if (any(eligible)) {
+  comparison$delta_AIC[eligible] <-
+    comparison$AIC[eligible] - min(comparison$AIC[eligible])
+}
+
+# Keep the progression from simplest to final model.
+comparison_table <- comparison %>%
+  mutate(
+    across(c(AIC, BIC, delta_AIC), ~ round(.x, 2)),
+    across(ends_with("_p"), ~ signif(.x, 3))
+  ) %>%
+  print(width = Inf)
+
+#save
+
+write_csv(comparison_table, "dharma_comparisons_models.csv")
+
+# Retain your final model for emmeans, etc.
+m_final <- models$M5_t_final
+
+
+
+# ---------------------------------------------------------
+# 5) Inspect final-model residual plots
+# ---------------------------------------------------------
+sim_final <- diagnostics$M5_t_final
+
+if (!is.null(sim_final)) {
+  plot(sim_final)
+
+  plotResiduals(sim_final, form = df_compare$row_f)
+  plotResiduals(sim_final, form = df_compare$col_f)
+  plotResiduals(sim_final, form = df_compare$plate)
+  plotResiduals(sim_final, form = df_compare$knockdown)
+}
+
+print(testUniformity(sim_final))
+# save as pdf 7x5 inches QQplot_residuals_glmtbb
+
+print(testDispersion(sim_final))
+print(testOutliers(sim_final))
+
+
+
+### extra section to extend time of convergence for final model
+```

@@ -1,0 +1,1262 @@
+---
+title: "deseq_analysis_1"
+author: "CZJS"
+date: "2026-08-24"
+output:
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+---
+
+
+
+Loading libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(data.table)
+library(DESeq2)
+library(plotly)
+library(fgsea)
+library(msigdbr)
+library(patchwork)
+library(ggpubr)
+library(EnhancedVolcano)
+library(UpSetR)
+library(venneuler)
+library(grid)
+
+
+```
+
+
+Import and wrangle data
+
+```{r wrangle}
+
+setwd("comp_bio/capture_c_adipocytes/main_screen/")
+
+zfp36l2_counts <- read_csv("ZFP36L2-KD_NNRCO-DS-P232_deseq2_results.csv")
+pygo2_counts <- read_csv("PYGO2-KD_NNRCO-DS-P232_deseq2_results.csv")
+ppp_counts <- read_csv("PPP2R5A-KD_NNRCO-DS-P232_deseq2_results.csv")
+
+head(zfp36l2_counts)
+
+summary(zfp36l2_counts)
+
+zfp36l2_counts <- zfp36l2_counts[order(zfp36l2_counts$padj),] 
+
+# why do some of them have padj values and some do not?
+
+zfp_na <- zfp36l2_counts %>% dplyr::filter(is.na(padj))
+
+max(zfp_na$baseMean)
+
+hist(zfp36l2_counts$baseMean, xlim = c(0, 200), breaks = 20000)
+
+```
+
+
+Volcano plot?
+
+```{r volcanoes}
+
+
+with(zfp36l2_counts, plot(log2FoldChange, -log10(pvalue), pch=20, main="Volcano plot", xlim=c(-3,3)))
+
+# Add colored points: blue if padj<0.01, red if log2FC>1 and padj<0.05)
+with(subset(zfp36l2_counts, padj<.01 ), points(log2FoldChange, -log10(pvalue), pch=20, col="blue"))
+with(subset(zfp36l2_counts, padj<.01 & abs(log2FoldChange)>2), points(log2FoldChange, -log10(pvalue), pch=20, col="red"))
+
+
+
+
+
+
+# make the Plot.ly plot
+p <- plot_ly(data = zfp36l2_counts, x = zfp36l2_counts$log2FoldChange, y = -log10(zfp36l2_counts$pvalue), text = zfp36l2_counts$gene) 
+p
+#pygo2
+py <- plot_ly(data = pygo2_counts, x = pygo2_counts$log2FoldChange, y = -log10(pygo2_counts$pvalue), text = pygo2_counts$gene) 
+py
+#ppp2r5a
+ppp <- plot_ly(data = ppp_counts, x = ppp_counts$log2FoldChange, y = -log10(ppp_counts$pvalue), text = ppp_counts$gene) 
+ppp
+# check enhancedvolcanoplots
+
+
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+# Define gene symbols
+gene_symbols <- zfp36l2_counts$gene
+
+gene_symbols_pygo <- pygo2_counts$gene
+
+gene_symbols_ppp <- ppp_counts$gene
+
+# Map symbols to gene descriptions/full names
+gene_desc <- mapIds(
+    org.Hs.eg.db,
+    keys = gene_symbols,
+    keytype = "SYMBOL",
+    column = "GENENAME",
+    multiVals = "first"
+) %>% as.data.frame() %>% 
+    dplyr::rename(gene_description = ".")
+
+gene_desc$gene <- row.names(gene_desc)
+
+zfp36l2_counts_named <- left_join(zfp36l2_counts, gene_desc)
+
+# pygo
+gene_desc_pygo <- mapIds(
+    org.Hs.eg.db,
+    keys = gene_symbols_pygo,
+    keytype = "SYMBOL",
+    column = "GENENAME",
+    multiVals = "first"
+) %>% as.data.frame() %>% 
+    dplyr::rename(gene_description = ".")
+
+gene_desc_pygo$gene <- row.names(gene_desc_pygo)
+
+pygo_counts_named <- left_join(pygo2_counts, gene_desc_pygo)
+
+
+# ppp
+gene_desc_ppp <- mapIds(
+    org.Hs.eg.db,
+    keys = gene_symbols_ppp,
+    keytype = "SYMBOL",
+    column = "GENENAME",
+    multiVals = "first"
+) %>% as.data.frame() %>% 
+    dplyr::rename(gene_description = ".")
+
+gene_desc_ppp$gene <- row.names(gene_desc_ppp)
+
+ppp_counts_named <- left_join(ppp_counts, gene_desc_ppp)
+
+
+
+```
+
+```{r enhancedvolcano}
+
+
+### ZFP36L2
+
+#find most top 10 significant genes and label
+# zfp_top_10_padj <- zfp36l2_counts[order(zfp36l2_counts$padj),]
+# zfp_top_10_padj <- zfp_top_10_padj[abs(zfp_top_10_padj$log2FoldChange) >= 0.58 & zfp_top_10_padj$padj < 0.05] %>% 
+#     dplyr::slice_min(n = 10, order_by = zfp_top_10_padj$padj)
+
+
+zfp_top_10_padj <- zfp36l2_counts %>%
+  dplyr::filter(!is.na(padj), abs(log2FoldChange) >= 0.58, padj < 0.05 ) %>%
+  dplyr::slice_min( order_by = padj,n = 10, with_ties = FALSE)
+
+
+EnhancedVolcano(zfp36l2_counts,
+                lab = zfp36l2_counts$gene,
+                x = 'log2FoldChange',
+                y = 'padj',
+                selectLab = zfp_top_10_padj$gene,
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.58,
+                pointSize = 4.0,
+                labSize = 6.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                colAlpha = 4/5,
+                legendPosition = 'right',
+                legendLabSize = 14,
+                legendIconSize = 4.0,
+                legendLabels = c("NS", expression(Log[2] ~ FC), "adjusted p-val", expression(adj ~ p - val ~ and
+                                                                                             ~ log[2] ~ FC)),
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black')
+
+# saved as ZFP36L2_enhanced_volcano_top10 png and svg, dimensions 1200*700
+
+### PYGO2
+#find most top 10 significant genes and label
+# pygo_top_10_padj <- pygo2_counts[order(pygo2_counts$padj),]
+# pygo_top_10_padj <- pygo_top_10_padj[abs(log2FoldChange) >= 0.58 & padj < 0.05] %>% 
+#     dplyr::slice_min(n = 10, order_by = padj)
+
+
+pygo_top_10_padj <- pygo2_counts %>%
+  dplyr::filter(!is.na(padj), abs(log2FoldChange) >= 0.58, padj < 0.05 ) %>%
+  dplyr::slice_min( order_by = padj,n = 10, with_ties = FALSE)
+
+
+EnhancedVolcano(pygo2_counts,
+                lab = pygo2_counts$gene,
+                x = 'log2FoldChange',
+                y = 'padj',
+                selectLab = pygo_top_10_padj$gene,
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.58,
+                pointSize = 4.0,
+                labSize = 6.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                colAlpha = 4/5,
+                legendPosition = 'right',
+                legendLabSize = 14,
+                legendIconSize = 4.0,
+                legendLabels = c("NS", expression(Log[2] ~ FC), "adjusted p-val", expression(adj ~ p - val ~ and
+                                                                                             ~ log[2] ~ FC)),
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black')
+
+# saved as PYGO2_enhanced_volcano_top10 png and svg, dimensions 1200*700
+
+
+### PPP
+#find most top 10 significant genes and label
+# ppp_top_10_padj <- ppp_counts[order(ppp_counts$padj),]
+# ppp_top_10_padj <- ppp_top_10_padj[abs(log2FoldChange) >= 0.58 & padj < 0.05] %>% 
+#     dplyr::slice_min(n = 10, order_by = padj)
+# 
+
+ppp_top_10_padj <- ppp_counts %>%
+  dplyr::filter(!is.na(padj), abs(log2FoldChange) >= 0.58, padj < 0.05 ) %>%
+  dplyr::slice_min( order_by = padj,n = 10, with_ties = FALSE)
+
+
+EnhancedVolcano(ppp_counts,
+                lab = ppp_counts$gene,
+                x = 'log2FoldChange',
+                y = 'padj',
+                selectLab = ppp_top_10_padj$gene,
+                xlab = bquote(~Log[2]~ 'fold change'),
+                pCutoff = 0.05,
+                FCcutoff = 0.58,
+                pointSize = 4.0,
+                labSize = 6.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = TRUE,
+                colAlpha = 4/5,
+                legendPosition = 'right',
+                legendLabSize = 14,
+                legendIconSize = 4.0,
+                legendLabels = c("NS", expression(Log[2] ~ FC), "adjusted p-val", expression(adj ~ p - val ~ and
+                                                                                             ~ log[2] ~ FC)),
+                drawConnectors = TRUE,
+                widthConnectors = 1.0,
+                colConnectors = 'black')
+
+# saved as PPP2R5A_enhanced_volcano_top10 png and svg, dimensions 1200*700
+
+
+
+```
+
+
+
+```{r maplot}
+
+plot(log(zfp36l2_counts$baseMean), zfp36l2_counts$log2FoldChange)
+
+plot(pygo2_counts$baseMean, pygo2_counts$log2FoldChange)
+plot(ppp_counts$baseMean, ppp_counts$log2FoldChange)
+
+
+library(ggpubr)
+
+### ZFP
+
+ggmaplot(
+    zfp36l2_counts,
+    fdr = 0.05,
+    fc = 1.5,
+    genenames = as.vector(zfp36l2_counts$gene),
+    detection_call = NULL,
+    size = NULL,
+    alpha = 1,
+    seed = 42,
+    font.label = c(12, "plain", "black"),
+    label.rectangle = T,
+    palette = c("#B31B21", "#1465AC", "lightgrey"),
+    top = 15,
+    select.top.method = c("padj", "fc"),
+    label.select = NULL,
+    facet.by = NULL,
+    main = "ZFP36L2",
+    xlab = "Log2 mean expression",
+    ylab = "Log2 fold change",
+    line.color = "black",
+    legend = "top",
+    ggtheme = ggplot2::theme_minimal()
+)
+
+# save as ZFP36L2_MA_plot png and svg dim 1200*700
+
+### PYGO2
+
+
+ggmaplot(
+    pygo2_counts,
+    fdr = 0.05,
+    fc = 1.5,
+    genenames = as.vector(pygo2_counts$gene),
+    detection_call = NULL,
+    size = NULL,
+    alpha = 1,
+    seed = 42,
+    font.label = c(12, "plain", "black"),
+    label.rectangle = T,
+    palette = c("#B31B21", "#1465AC", "lightgrey"),
+    top = 15,
+    select.top.method = c("padj", "fc"),
+    label.select = NULL,
+    facet.by = NULL,
+    main = "PYGO2",
+    xlab = "Log2 mean expression",
+    ylab = "Log2 fold change",
+    line.color = "black",
+    legend = "top",
+    ggtheme = ggplot2::theme_minimal()
+)
+
+# save as PYGO2_MA_plot png and svg dim 1200*700
+
+
+### PPP2R5A
+
+
+ggmaplot(
+    ppp_counts,
+    fdr = 0.05,
+    fc = 1.5,
+    genenames = as.vector(ppp_counts$gene),
+    detection_call = NULL,
+    size = NULL,
+    alpha = 1,
+    seed = 42,
+    font.label = c(12, "plain", "black"),
+    label.rectangle = T,
+    palette = c("#B31B21", "#1465AC", "lightgrey"),
+    top = 15,
+    select.top.method = c("padj", "fc"),
+    label.select = NULL,
+    facet.by = NULL,
+    main = "PPP2R5A",
+    xlab = "Log2 mean expression",
+    ylab = "Log2 fold change",
+    line.color = "black",
+    legend = "top",
+    ggtheme = ggplot2::theme_minimal()
+)
+
+# save as PPP2R5A_MA_plot png and svg dim 1200*700
+
+
+### quick check of something
+zfp_top_15_padj <- zfp36l2_counts_named[order(zfp36l2_counts_named$padj),]
+zfp_top_15_padj <- zfp_top_15_padj[abs(log2FoldChange) >= 0.58 & padj < 0.05] %>% 
+    dplyr::slice_min(n = 15, order_by = padj)
+
+
+
+### quick check of something
+pygo_top_15_padj <- pygo_counts_named[order(pygo_counts_named$padj),]
+pygo_top_15_padj <- pygo_top_15_padj[abs(log2FoldChange) >= 0.58 & padj < 0.05] %>% 
+    dplyr::slice_min(n = 15, order_by = padj)
+
+
+
+### quick check of something
+ppp_top_15_padj <- ppp_counts_named[order(ppp_counts_named$padj),]
+ppp_top_15_padj <- ppp_top_15_padj[abs(log2FoldChange) >= 0.58 & padj < 0.05] %>% 
+    dplyr::slice_min(n = 15, order_by = padj)
+
+
+
+
+
+
+
+
+
+
+```
+
+
+```{r gseaforplots}
+
+# stat is the Wald statistic
+
+### ZFP36L2
+
+zfp_ranks <- zfp36l2_counts$stat
+names(zfp_ranks) <- zfp36l2_counts$gene
+zfp_ranks <- sort(zfp_ranks, decreasing = TRUE)
+
+hallmark_df <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_list <- split(hallmark_df$gene_symbol, hallmark_df$gs_name)
+
+fgsea_zfp <- fgsea(
+    pathways = hallmark_list,
+    stats = zfp_ranks,
+    minSize = 15,
+    maxSize = 500
+)
+
+fgsea_zfp <- fgsea_zfp[order(fgsea_zfp$padj), ]
+fgsea_tbl <- as.data.frame(fgsea_zfp)
+
+fgsea_tbl <- fgsea_tbl %>%
+    filter(!is.na(padj)) %>%
+    mutate(
+        log10padj = -log10(pmax(padj, 1e-300)),
+        pathway_clean = gsub("_", " ", gsub("^HALLMARK_", "", pathway))
+    )
+
+top_up <- fgsea_tbl %>%
+    filter(NES > 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+top_down <- fgsea_tbl %>%
+    filter(NES < 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+top_fgsea <- bind_rows(top_up, top_down) %>%
+    mutate(
+        pathway_clean = fct_reorder(pathway_clean, NES),
+        significant = padj < 0.05
+    )
+
+p_fgsea_bar <- top_fgsea %>% 
+    dplyr::filter(significant == TRUE) %>% 
+    ggplot(aes(x = pathway_clean, y = NES, fill = significant)) +
+    geom_col() +
+    coord_flip() +
+    geom_hline(yintercept = 0, colour = "black", linewidth = 0.3) +
+    scale_fill_manual(
+        values = c("TRUE" = "#B31B21", "FALSE" = "grey75"),
+        labels = c("TRUE" = "padj < 0.05", "FALSE" = "padj >= 0.05"),
+        breaks = c("TRUE", "FALSE"),
+        name = "Significant"
+    ) +
+    labs(
+        title = "FGSEA: top enriched pathways in ZFP36L2 knockdown",
+        x = NULL,
+        y = "Normalized Enrichment Score (NES)"
+    ) +
+    theme_minimal()+
+    theme(axis.text.y = element_text(size = 10),
+        plot.title = element_text(size = 12, face = "bold"))
+
+
+p_fgsea_bar
+
+#save as ZFP36L2_GSEA png and svg 1200x700 pdf 12x7 landscape inches
+
+
+### PYGO2
+
+pygo2_ranks <- pygo2_counts$stat
+names(pygo2_ranks) <- pygo2_counts$gene
+pygo2_ranks <- sort(pygo2_ranks, decreasing = TRUE)
+
+hallmark_df <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_list <- split(hallmark_df$gene_symbol, hallmark_df$gs_name)
+
+fgsea_pygo2 <- fgsea(
+    pathways = hallmark_list,
+    stats = pygo2_ranks,
+    minSize = 15,
+    maxSize = 500
+)
+
+fgsea_pygo2 <- fgsea_pygo2[order(fgsea_pygo2$padj), ]
+fgsea_tbl <- as.data.frame(fgsea_pygo2)
+
+fgsea_tbl <- fgsea_tbl %>%
+    filter(!is.na(padj)) %>%
+    mutate(
+        log10padj = -log10(pmax(padj, 1e-300)),
+        pathway_clean = gsub("_", " ", gsub("^HALLMARK_", "", pathway))
+    )
+
+top_up <- fgsea_tbl %>%
+    filter(NES > 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+top_down <- fgsea_tbl %>%
+    filter(NES < 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+
+top_fgsea <- bind_rows(top_up, top_down) %>%
+    mutate(
+        pathway_clean = fct_reorder(pathway_clean, NES),
+        significant = padj < 0.05
+    )
+
+
+p_fgsea_bar <- top_fgsea %>% 
+    dplyr::filter(significant == TRUE) %>% 
+    ggplot(aes(x = pathway_clean, y = NES, fill = significant)) +
+    geom_col() +
+    coord_flip() +
+    geom_hline(yintercept = 0, colour = "black", linewidth = 0.3) +
+    scale_fill_manual(
+        values = c("TRUE" = "#B31B21", "FALSE" = "grey75"),
+        labels = c("TRUE" = "padj < 0.05", "FALSE" = "padj >= 0.05"),
+        breaks = c("TRUE", "FALSE"),
+        name = "Significant"
+    ) +
+    labs(
+        title = "FGSEA: top enriched pathways in PYGO2 knockdown",
+        x = NULL,
+        y = "Normalized Enrichment Score (NES)"
+    ) +
+    theme_minimal()+
+    theme(axis.text.y = element_text(size = 10),
+        plot.title = element_text(size = 12, face = "bold"))
+
+
+p_fgsea_bar
+
+#save as PYGO2_GSEA png and svg 1200x700 pdf 12x7 inches
+
+
+### PPP2R5A
+
+ppp_ranks <- ppp_counts$stat
+names(ppp_ranks) <- ppp_counts$gene
+ppp_ranks <- sort(ppp_ranks, decreasing = TRUE)
+
+hallmark_df <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_list <- split(hallmark_df$gene_symbol, hallmark_df$gs_name)
+
+fgsea_ppp <- fgsea(
+    pathways = hallmark_list,
+    stats = ppp_ranks,
+    minSize = 15,
+    maxSize = 500
+)
+
+fgsea_ppp <- fgsea_ppp[order(fgsea_ppp$padj), ]
+fgsea_tbl <- as.data.frame(fgsea_ppp)
+
+fgsea_tbl <- fgsea_tbl %>%
+    filter(!is.na(padj)) %>%
+    mutate(
+        log10padj = -log10(pmax(padj, 1e-300)),
+        pathway_clean = gsub("_", " ", gsub("^HALLMARK_", "", pathway))
+    )
+
+top_up <- fgsea_tbl %>%
+    filter(NES > 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+top_down <- fgsea_tbl %>%
+    filter(NES < 0) %>%
+    arrange(padj) %>%
+    slice_head(n = 10)
+
+top_fgsea <- bind_rows(top_up, top_down) %>%
+    mutate(
+        pathway_clean = fct_reorder(pathway_clean, NES),
+        significant = padj < 0.05
+    )
+
+
+p_fgsea_bar <- top_fgsea %>% 
+    dplyr::filter(significant == TRUE) %>% 
+    ggplot(aes(x = pathway_clean, y = NES, fill = significant)) +
+    geom_col() +
+    coord_flip() +
+    geom_hline(yintercept = 0, colour = "black", linewidth = 0.3) +
+    scale_fill_manual(
+        values = c("TRUE" = "#B31B21", "FALSE" = "grey75"),
+        labels = c("TRUE" = "padj < 0.05", "FALSE" = "padj >= 0.05"),
+        breaks = c("TRUE", "FALSE"),
+        name = "Significant"
+    ) +
+    labs(
+        title = "FGSEA: top enriched pathways in PPP2R5A knockdown",
+        x = NULL,
+        y = "Normalized Enrichment Score (NES)"
+    ) +
+    theme_minimal()+
+    theme(axis.text.y = element_text(size = 10),
+        plot.title = element_text(size = 12, face = "bold"))
+
+
+p_fgsea_bar
+
+#save as PPP2R5A_GSEA png and svg 1200x700 pdf 12x7 inches
+
+
+```
+
+
+```{r gsea}
+# 
+# # # stat is the Wald statistic
+# 
+# zfp_ranks <- zfp36l2_counts$stat
+# names(zfp_ranks) <- zfp36l2_counts$gene
+# zfp_ranks <- sort(zfp_ranks, decreasing = TRUE)
+# 
+# hallmark_df <- msigdbr(species = "Homo sapiens", category = "H")
+# hallmark_list <- split(hallmark_df$gene_symbol, hallmark_df$gs_name)
+# 
+# fgsea_zfp <- fgsea(
+#     pathways = hallmark_list,
+#     stats = zfp_ranks,
+#     minSize = 15,
+#     maxSize = 500
+# )
+# 
+# fgsea_zfp <- fgsea_zfp[order(fgsea_zfp$padj), ]
+# head(fgsea_zfp[, c("pathway", "NES", "pval", "padj")])
+# 
+# 
+# ### plots?
+# 
+# fgsea_tbl <- as.data.frame(fgsea_zfp)
+# 
+# fgsea_tbl <- fgsea_tbl %>%
+#     filter(!is.na(padj)) %>%
+#     mutate(
+#         log10padj = -log10(pmax(padj, 1e-300)),
+#         pathway_clean = gsub("_", " ", gsub("^HALLMARK_", "", pathway))
+#     )
+# 
+# top_up <- fgsea_tbl %>%
+#     filter(NES > 0) %>%
+#     arrange(padj) %>%
+#     slice_head(n = 10)
+# 
+# top_down <- fgsea_tbl %>%
+#     filter(NES < 0) %>%
+#     arrange(padj) %>%
+#     slice_head(n = 10)
+# 
+# top_fgsea <- bind_rows(top_up, top_down) %>%
+#     mutate(pathway_clean = fct_reorder(pathway_clean, NES))
+# 
+# p_fgsea_bar <- ggplot(top_fgsea, aes(x = pathway_clean, y = NES, fill = NES > 0)) +
+#     geom_col() +
+#     coord_flip() +
+#     scale_fill_manual(values = c("TRUE" = "#B31B21", "FALSE" = "#1465AC")) +
+#     labs(
+#         title = "FGSEA: top enriched pathways in ZFP36L2 knockdown",
+#         x = NULL,
+#         y = "Normalized Enrichment Score (NES)",
+#         fill = "Direction"
+#     ) +
+#     theme_minimal()+
+#     theme(axis.text.y = element_text(size = 10),
+#         plot.title = element_text(size = 12, face = "bold"))
+# 
+# 
+# p_fgsea_bar
+# 
+
+
+
+
+
+# ##
+# 
+# top_fgsea_dot <- fgsea_tbl %>%
+#   arrange(padj) %>%
+#   slice_head(n = 20) %>%
+#   mutate(pathway_clean = fct_reorder(pathway_clean, NES))
+# 
+# p_fgsea_dot <- ggplot(top_fgsea_dot, aes(x = NES, y = pathway_clean)) +
+#   geom_point(aes(size = size, color = log10padj)) +
+#   scale_color_viridis_c() +
+#   labs(
+#     title = "FGSEA: top pathways",
+#     x = "NES",
+#     y = NULL,
+#     color = "-log10 adjusted p-value",
+#     size = "Gene set size"
+#   ) +
+#   theme_minimal()
+# 
+# p_fgsea_dot
+# 
+# ##
+# 
+# top_pathway <- fgsea_tbl %>%
+#   arrange(padj) %>%
+#   slice(1) %>%
+#   pull(pathway)
+# 
+# p_enrich <- fgsea::plotEnrichment(
+#   pathway = hallmark_list[[top_pathway]],
+#   stats = ranks
+# ) +
+#   labs(
+#     title = top_pathway,
+#     subtitle = "FGSEA enrichment curve"
+#   )
+# 
+# p_enrich
+# 
+# ##
+# 
+# library(patchwork)
+# 
+# top_paths <- fgsea_tbl %>%
+#   arrange(padj) %>%
+#   slice_head(n = 4) %>%
+#   pull(pathway)
+# 
+# plot_list <- lapply(top_paths, function(pw) {
+#   fgsea::plotEnrichment(hallmark_list[[pw]], ranks) +
+#     labs(title = pw)
+# })
+# 
+# wrap_plots(plot_list, ncol = 1)
+
+
+```
+
+
+```{r fgseaiterations}
+
+# =========================================================
+# FGSEA for multiple knockdowns across:
+#   1) Hallmark
+#   2) Reactome
+#   3) GO Biological Process
+#
+# Creates, for each knockdown x collection:
+#   - fgsea result table
+#   - bar plot
+#   - dot plot
+#   - top single enrichment curve
+#   - panel of top enrichment curves
+#
+# Also creates, for each knockdown:
+#   - combined side-by-side bar plot:
+#       Hallmark | Reactome | GO BP
+#   - combined side-by-side dot plot:
+#       Hallmark | Reactome | GO BP
+#   - combined side-by-side top enrichment curves
+#
+# Assumptions:
+#   - each DE table has columns called `gene` and `stat`
+#   - `gene` contains human gene symbols
+#
+# If your `msigdbr()` version complains about `category` / `subcategory`,
+# replace them with `collection` / `subcollection`.
+# =========================================================
+
+# -------------------------
+# 1. ADD YOUR KNOCKDOWN TABLES HERE
+# -------------------------
+kd_tables <- list(
+    ZFP36L2 = zfp36l2_counts,
+    PYGO2 = pygo2_counts,
+    PPP2R5A = ppp_counts
+)
+
+# -------------------------
+# 2. SETTINGS
+# -------------------------
+species_name <- "Homo sapiens"
+gene_col <- "gene"
+rank_col <- "stat"
+
+min_size <- 15
+max_size <- 500
+
+# Fewer pathways can make plots much clearer
+top_n_bar <- 8
+top_n_dot <- 15
+top_n_curves <- 4
+
+# Label/plot size controls
+label_wrap_width <- 28     # smaller = more line breaks in pathway names
+axis_text_size <- 8
+plot_title_size <- 11
+plot_subtitle_size <- 9
+legend_text_size <- 8
+legend_title_size <- 9
+base_font_size <- 10
+
+# Optional label shortening
+abbreviate_labels <- TRUE
+
+# -------------------------
+# 3. LOAD GENE SET COLLECTIONS
+# -------------------------
+hallmark_df <- msigdbr(species = species_name, category = "H")
+reactome_df <- msigdbr(species = species_name, category = "C2", subcategory = "CP:REACTOME")
+gobp_df <- msigdbr(species = species_name, category = "C5", subcategory = "GO:BP")
+
+gene_sets <- list(
+    Hallmark = split(hallmark_df$gene_symbol, hallmark_df$gs_name),
+    Reactome = split(reactome_df$gene_symbol, reactome_df$gs_name),
+    GO_BP = split(gobp_df$gene_symbol, gobp_df$gs_name)
+)
+
+# -------------------------
+# 4. HELPER FUNCTIONS
+# -------------------------
+clean_pathway_names <- function(x) {
+    x <- gsub("^(HALLMARK|REACTOME|GOBP|GO_BP)_", "", x)
+    x <- gsub("_", " ", x)
+    x
+}
+
+shorten_labels <- function(x) {
+    x <- gsub("^POSITIVE REGULATION OF ", "POS REG OF ", x)
+    x <- gsub("^NEGATIVE REGULATION OF ", "NEG REG OF ", x)
+    x <- gsub("^REGULATION OF ", "REG OF ", x)
+    x <- gsub("TRANSCRIPTION", "TXN", x)
+    x <- gsub("PHOSPHORYLATION", "PHOSPH.", x)
+    x <- gsub("ORGANIZATION", "ORG.", x)
+    x <- gsub("BIOSYNTHETIC", "BIOSYN", x)
+    x
+}
+
+format_pathway_labels <- function(x, wrap_width = 28, abbreviate = TRUE) {
+    x <- as.character(x)
+    if (abbreviate) {
+        x <- shorten_labels(x)
+    }
+    stringr::str_wrap(x, width = wrap_width)
+}
+
+make_ranks <- function(df, gene_col = "gene", rank_col = "stat") {
+    df2 <- df %>%
+        dplyr::select(gene = all_of(gene_col), stat = all_of(rank_col)) %>%
+        filter(!is.na(gene), !is.na(stat)) %>%
+        group_by(gene) %>%
+        slice_max(order_by = abs(stat), n = 1, with_ties = FALSE) %>%
+        ungroup()
+    
+    ranks <- df2$stat
+    names(ranks) <- df2$gene
+    ranks <- sort(ranks, decreasing = TRUE)
+    return(ranks)
+}
+
+run_fgsea_one <- function(ranks, pathways, kd_name, collection_name,
+                          min_size = 15, max_size = 500,
+                          top_n_bar = 8, top_n_dot = 15, top_n_curves = 4,
+                          label_wrap_width = 28, abbreviate_labels = TRUE,
+                          axis_text_size = 8, plot_title_size = 11,
+                          plot_subtitle_size = 9, legend_text_size = 8,
+                          legend_title_size = 9, base_font_size = 10) {
+    
+    fg <- fgsea(
+        pathways = pathways,
+        stats = ranks,
+        minSize = min_size,
+        maxSize = max_size
+    )
+    
+    fg <- fg[order(fg$padj, fg$pval), ]
+    
+    fg_tbl <- as.data.frame(fg) %>%
+        filter(!is.na(padj)) %>%
+        mutate(
+            log10padj = -log10(pmax(padj, 1e-300)),
+            pathway_clean = clean_pathway_names(pathway)
+        )
+    
+    if (nrow(fg_tbl) == 0) {
+        return(list(
+            result = fg,
+            table = fg_tbl,
+            bar = NULL,
+            dot = NULL,
+            curve_top1 = NULL,
+            curve_topN = NULL
+        ))
+    }
+    
+    n_bar_fallback <- min(2 * top_n_bar, nrow(fg_tbl))
+    n_dot_plot <- min(top_n_dot, nrow(fg_tbl))
+    n_curve_plot <- min(top_n_curves, nrow(fg_tbl))
+    
+    top_up <- fg_tbl %>%
+        filter(NES > 0) %>%
+        arrange(padj) %>%
+        slice_head(n = top_n_bar)
+    
+    top_down <- fg_tbl %>%
+        filter(NES < 0) %>%
+        arrange(padj) %>%
+        slice_head(n = top_n_bar)
+    
+    top_bar <- bind_rows(top_up, top_down)
+    
+    if (nrow(top_bar) == 0) {
+        top_bar <- fg_tbl %>%
+            arrange(padj) %>%
+            slice_head(n = n_bar_fallback)
+    }
+    
+    top_bar <- top_bar %>%
+        mutate(pathway_clean = fct_reorder(pathway_clean, NES))
+    
+    p_bar <- ggplot(top_bar, aes(x = pathway_clean, y = NES, fill = NES > 0)) +
+        geom_col() +
+        coord_flip() +
+        scale_x_discrete(labels = function(x) {
+            format_pathway_labels(
+                x,
+                wrap_width = label_wrap_width,
+                abbreviate = abbreviate_labels
+            )
+        }) +
+        scale_fill_manual(
+            values = c("TRUE" = "#D55E00", "FALSE" = "#0072B2"),
+            labels = c("FALSE" = "Negative NES", "TRUE" = "Positive NES")
+        ) +
+        labs(
+            title = paste0(kd_name, " | ", collection_name),
+            subtitle = "FGSEA top enriched pathways",
+            x = NULL,
+            y = "Normalized Enrichment Score (NES)",
+            fill = "Direction"
+        ) +
+        theme_minimal(base_size = base_font_size) +
+        theme(
+            axis.text.y = element_text(size = axis_text_size),
+            plot.title = element_text(size = plot_title_size, face = "bold"),
+            plot.subtitle = element_text(size = plot_subtitle_size),
+            legend.text = element_text(size = legend_text_size),
+            legend.title = element_text(size = legend_title_size)
+        )
+    
+    top_dot <- fg_tbl %>%
+        arrange(padj) %>%
+        slice_head(n = n_dot_plot) %>%
+        mutate(pathway_clean = fct_reorder(pathway_clean, NES))
+    
+    p_dot <- ggplot(top_dot, aes(x = NES, y = pathway_clean)) +
+        geom_point(aes(size = size, color = log10padj)) +
+        scale_y_discrete(labels = function(x) {
+            format_pathway_labels(
+                x,
+                wrap_width = label_wrap_width,
+                abbreviate = abbreviate_labels
+            )
+        }) +
+        scale_color_viridis_c() +
+        labs(
+            title = paste0(kd_name, " | ", collection_name),
+            subtitle = "FGSEA top pathways",
+            x = "NES",
+            y = NULL,
+            color = "-log10 adjusted p-value",
+            size = "Gene set size"
+        ) +
+        theme_minimal(base_size = base_font_size) +
+        theme(
+            axis.text.y = element_text(size = axis_text_size),
+            plot.title = element_text(size = plot_title_size, face = "bold"),
+            plot.subtitle = element_text(size = plot_subtitle_size),
+            legend.text = element_text(size = legend_text_size),
+            legend.title = element_text(size = legend_title_size)
+        )
+    
+    top_pathway <- fg_tbl %>%
+        arrange(padj) %>%
+        slice(1) %>%
+        pull(pathway)
+    
+    p_curve_top1 <- fgsea::plotEnrichment(pathways[[top_pathway]], ranks) +
+        labs(
+            title = paste0(kd_name, " | ", collection_name),
+            subtitle = format_pathway_labels(
+                clean_pathway_names(top_pathway),
+                wrap_width = label_wrap_width,
+                abbreviate = abbreviate_labels
+            )
+        ) +
+        theme_minimal(base_size = base_font_size) +
+        theme(
+            plot.title = element_text(size = plot_title_size, face = "bold"),
+            plot.subtitle = element_text(size = plot_subtitle_size)
+        )
+    
+    curve_pathways <- fg_tbl %>%
+        arrange(padj) %>%
+        slice_head(n = n_curve_plot) %>%
+        pull(pathway)
+    
+    curve_list <- lapply(curve_pathways, function(pw) {
+        fgsea::plotEnrichment(pathways[[pw]], ranks) +
+            labs(
+                title = format_pathway_labels(
+                    clean_pathway_names(pw),
+                    wrap_width = label_wrap_width,
+                    abbreviate = abbreviate_labels
+                ),
+                subtitle = paste0(kd_name, " | ", collection_name)
+            ) +
+            theme_minimal(base_size = base_font_size) +
+            theme(
+                plot.title = element_text(size = plot_title_size, face = "bold"),
+                plot.subtitle = element_text(size = plot_subtitle_size)
+            )
+    })
+    
+    p_curve_topN <- wrap_plots(curve_list, ncol = 1)
+    
+    return(list(
+        result = fg,
+        table = fg_tbl,
+        bar = p_bar,
+        dot = p_dot,
+        curve_top1 = p_curve_top1,
+        curve_topN = p_curve_topN
+    ))
+}
+
+make_side_by_side_plot <- function(one_kd_out, plot_type = c("bar", "dot", "curve_top1"), kd_name = NULL) {
+    plot_type <- match.arg(plot_type)
+    collections <- c("Hallmark", "Reactome", "GO_BP")
+    
+    plot_list <- lapply(collections, function(collection_name) {
+        p <- one_kd_out[[collection_name]][[plot_type]]
+        if (is.null(p)) {
+            return(patchwork::plot_spacer())
+        } else {
+            return(p)
+        }
+    })
+    
+    wrap_plots(plot_list, ncol = 3) +
+        plot_layout(guides = "collect") &
+        theme(legend.position = "bottom")
+}
+
+# -------------------------
+# 5. RUN FGSEA FOR ALL KNOCKDOWNS x ALL COLLECTIONS
+# -------------------------
+fgsea_outputs <- lapply(names(kd_tables), function(kd_name) {
+    ranks <- make_ranks(
+        df = kd_tables[[kd_name]],
+        gene_col = gene_col,
+        rank_col = rank_col
+    )
+    
+    out <- lapply(names(gene_sets), function(collection_name) {
+        run_fgsea_one(
+            ranks = ranks,
+            pathways = gene_sets[[collection_name]],
+            kd_name = kd_name,
+            collection_name = collection_name,
+            min_size = min_size,
+            max_size = max_size,
+            top_n_bar = top_n_bar,
+            top_n_dot = top_n_dot,
+            top_n_curves = top_n_curves,
+            label_wrap_width = label_wrap_width,
+            abbreviate_labels = abbreviate_labels,
+            axis_text_size = axis_text_size,
+            plot_title_size = plot_title_size,
+            plot_subtitle_size = plot_subtitle_size,
+            legend_text_size = legend_text_size,
+            legend_title_size = legend_title_size,
+            base_font_size = base_font_size
+        )
+    })
+    
+    names(out) <- names(gene_sets)
+    return(out)
+})
+
+names(fgsea_outputs) <- names(kd_tables)
+
+# -------------------------
+# 6. MAKE SIDE-BY-SIDE COLLECTION PLOTS FOR EACH KNOCKDOWN
+# -------------------------
+combined_plots <- lapply(names(fgsea_outputs), function(kd_name) {
+    one_kd_out <- fgsea_outputs[[kd_name]]
+    
+    combined_bar <- make_side_by_side_plot(
+        one_kd_out = one_kd_out,
+        plot_type = "bar",
+        kd_name = kd_name
+    ) + plot_annotation(title = paste0(kd_name, " | FGSEA summary across collections"))
+    
+    combined_dot <- make_side_by_side_plot(
+        one_kd_out = one_kd_out,
+        plot_type = "dot",
+        kd_name = kd_name
+    ) + plot_annotation(title = paste0(kd_name, " | FGSEA top pathways across collections"))
+    
+    combined_curve_top1 <- make_side_by_side_plot(
+        one_kd_out = one_kd_out,
+        plot_type = "curve_top1",
+        kd_name = kd_name
+    ) + plot_annotation(title = paste0(kd_name, " | Top enrichment curve in each collection"))
+    
+    list(
+        bar = combined_bar,
+        dot = combined_dot,
+        curve_top1 = combined_curve_top1
+    )
+})
+
+names(combined_plots) <- names(fgsea_outputs)
+
+# -------------------------
+# 7. EXAMPLES: VIEW RESULTS
+# -------------------------
+# for (kd_name in names(fgsea_outputs)) {
+#   cat("\n==============================\n")
+#   cat("Knockdown:", kd_name, "\n")
+#   cat("==============================\n")
+# 
+#   for (collection_name in names(fgsea_outputs[[kd_name]])) {
+#     cat("\nCollection:", collection_name, "\n")
+# 
+#     print(
+#       fgsea_outputs[[kd_name]][[collection_name]]$table %>%
+#         dplyr::select(pathway, NES, pval, padj) %>%
+#         head(10)
+#     )
+# 
+#     if (!is.null(fgsea_outputs[[kd_name]][[collection_name]]$bar)) {
+#       print(fgsea_outputs[[kd_name]][[collection_name]]$bar)
+#     }
+# 
+#     if (!is.null(fgsea_outputs[[kd_name]][[collection_name]]$dot)) {
+#       print(fgsea_outputs[[kd_name]][[collection_name]]$dot)
+#     }
+# 
+#     if (!is.null(fgsea_outputs[[kd_name]][[collection_name]]$curve_top1)) {
+#       print(fgsea_outputs[[kd_name]][[collection_name]]$curve_top1)
+#     }
+# 
+#     if (!is.null(fgsea_outputs[[kd_name]][[collection_name]]$curve_topN)) {
+#       print(fgsea_outputs[[kd_name]][[collection_name]]$curve_topN)
+#     }
+#   }
+# 
+#   cat("\nCombined plots across Hallmark / Reactome / GO_BP\n")
+# 
+#   if (!is.null(combined_plots[[kd_name]]$bar)) {
+#     print(combined_plots[[kd_name]]$bar)
+#   }
+# 
+#   if (!is.null(combined_plots[[kd_name]]$dot)) {
+#     print(combined_plots[[kd_name]]$dot)
+#   }
+# 
+#   if (!is.null(combined_plots[[kd_name]]$curve_top1)) {
+#     print(combined_plots[[kd_name]]$curve_top1)
+#   }
+# }
+# 
+
+print(combined_plots[["ZFP36L2"]]$bar)
+print(combined_plots[["PYGO2"]]$bar)
+print(combined_plots[["PPP2R5A"]]$bar)
+
+
+
+
+```
+
+
+
+
+```{r venndiagram}
+
+# Set the chart data
+expressionInput <- c(`#rstats` = 5, memes = 5, `#rstats&memes` = 3)
+
+# Create the Venn diagram
+# note on set up for java v11 jdk (v12 does not work with this)
+myExpVenn <- venneuler(expressionInput)
+par(cex=1.2)
+plot(myExpVenn, main = "Why I Love Twitter")
+grid.text(
+    "@littlemissdata",
+    x = 0.52,
+    y = 0.2,
+    gp = gpar(
+        fontsize = 10,
+        fontface = 3
+    )
+)
+
+zfp36l2_counts <- as.data.table(zfp36l2_counts)
+pygo2_counts <- as.data.table(pygo2_counts)
+ppp_counts <- as.data.table(ppp_counts)
+
+
+zfp_up <- zfp36l2_counts[log2FoldChange >= 0.58 & padj < 0.05] # 171
+zfp_down <- zfp36l2_counts[log2FoldChange <= -0.58 & padj < 0.05] # 163
+
+pygo_up <- pygo2_counts[log2FoldChange >= 0.58 & padj < 0.05] # 21
+pygo_down <- pygo2_counts[log2FoldChange <= -0.58 & padj < 0.05] #62
+
+ppp_up <- ppp_counts[log2FoldChange >= 0.58 & padj < 0.05] #21
+ppp_down <- ppp_counts[log2FoldChange <= -0.58 & padj < 0.05] #39
+
+write_csv(as.data.frame(zfp_up$gene), "zfp_up.csv")
+write_csv(as.data.frame(pygo_up$gene), "pygo_up.csv")
+write_csv(as.data.frame(ppp_up$gene), "ppp_up.csv")
+
+write_csv(as.data.frame(zfp_down$gene), "zfp_down.csv")
+write_csv(as.data.frame(pygo_down$gene), "pygo_down.csv")
+write_csv(as.data.frame(ppp_down$gene), "ppp_down.csv")
+
+
+# 0.58  = 1.5 fold change
+
+# up only
+
+zfp_pygo_up <- intersect(zfp_up$gene, pygo_up$gene) #4
+zfp_ppp_up <- intersect(zfp_up$gene, ppp_up$gene) #5
+ppp_pygo_up <- intersect(ppp_up$gene, pygo_up$gene) #1
+
+all_up <- intersect(zfp_up$gene, ppp_pygo_up) #1
+
+expressionInput <- c(`#rstats` = 5, memes = 5, `#rstats&memes` = 3)
+
+up_expression <- c("ZFP36L2" = 171, "PYGO2" = 21, "PPP2R5A" = 21, "ZFP36L2&PYGO2" = 4, "ZFP36L2&PPP2R5A" = 5, "PYGO2&PPP2R5A" = 1, "ZFP36L2&PYGO2&PPP2R5A" = 1 )
+
+up_venn <- venneuler(up_expressionzfp)
+up_venn$labels <- c()
+par(cex=1.2)
+plot(up_venn, main = "Upregulated DEGs across ZFP36L2, PYGO2 and PPP2R5A")
+
+# down only
+
+zfp_pygo_up <- intersect(zfp_up$gene, pygo_up$gene)
+zfp_ppp_up <- intersect(zfp_up$gene, ppp_up$gene)
+ppp_pygo_up <- intersect(ppp_up$gene, pygo_up$gene)
+
+all_up <- intersect(zfp_up$gene, ppp_pygo_up)
+
+
+```
